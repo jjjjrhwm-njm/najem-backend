@@ -1,70 +1,47 @@
 import telebot
-import json
+from telebot import types
+import json, os
 
-API_TOKEN = 'YOUR_BOT_TOKEN'
+API_TOKEN = '8322095833:AAEq5gd2R3HiN9agRdX-R995vHXeWx2oT7g'
+CHANNEL_ID = "@nejm_njm" 
+ADMIN_ID = 7650083401 
+
 bot = telebot.TeleBot(API_TOKEN)
 
-# إعدادات افتراضية
-app_config = {
-    "is_stopped": False,
-    "message": "",
-    "is_premium": True, # تفعيل الشراء للجميع
-    "update_url": "https://t.me/your_channel"
-}
-
 @bot.message_handler(commands=['start'])
-def send_welcome(message):
-    help_text = """
-    اهلا بك في لوحة تحكم التطبيق:
-    1. /stop_all - إيقاف التطبيق عن الجميع
-    2. /run_all - تشغيل التطبيق للجميع
-    3. /msg [النص] - إرسال رسالة تظهر عند دخول التطبيق
-    4. /free_on - تفعيل الميزات المدفوعة للكل
-    5. /free_off - إيقاف الميزات المدفوعة
-    """
-    bot.reply_to(message, help_text)
+def start(message):
+    if message.from_user.id == ADMIN_ID:
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("🔴 إيقاف الكل", callback_data="stop_all"),
+            types.InlineKeyboardButton("🟢 تشغيل الكل", callback_data="run_all"),
+            types.InlineKeyboardButton("📢 رسالة جماعية", callback_data="send_msg"),
+            types.InlineKeyboardButton("👤 فتح حسابي", callback_data="fix_acc")
+        )
+        bot.send_message(message.chat.id, "🛠 **لوحة التحكم المباشرة**", reply_markup=markup)
+    else:
+        bot.send_message(message.chat.id, "مرحباً بك في بوت نجم الإبداع.")
 
-@bot.message_handler(commands=['stop_all'])
-def stop_app(message):
-    app_config["is_stopped"] = True
-    save_config()
-    bot.reply_to(message, "تم إيقاف التطبيق عن الجميع 🛑")
-
-@bot.message_handler(commands=['run_all'])
-def run_app(message):
-    app_config["is_stopped"] = False
-    app_config["message"] = ""
-    save_config()
-    bot.reply_to(message, "تم تشغيل التطبيق بنجاح ✅")
-
-@bot.message_handler(commands=['msg'])
-def set_msg(message):
-    msg_text = message.text.replace('/msg ', '')
-    app_config["message"] = msg_text
-    save_config()
-    bot.reply_to(message, f"تم ضبط الرسالة: {msg_text}")
-
-def save_config():
-    with open('config.json', 'w') as f:
-        json.dump(app_config, f)
-    # هنا يجب أن يرفع الملف إلى سيرفرك الخاص ليكون الرابط مباشر
-
-bot.polling()
-    user = get_user(data, message.from_user.id)
-    link = f"https://t.me/{(bot.get_me()).username}?start=ref_{message.from_user.id}"
+@bot.callback_query_handler(func=lambda call: True)
+def handle_admin(call):
+    if call.data == "stop_all":
+        bot.send_message(CHANNEL_ID, "COMMAND_START [KILL_APP] COMMAND_END")
+        bot.answer_callback_query(call.id, "تم إرسال أمر الإيقاف 🛑")
     
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("🎁 تجربة مجانية", callback_data="free"),
-        types.InlineKeyboardButton("🔄 تحويل النقاط", callback_data="swap"),
-        types.InlineKeyboardButton("👤 حسابي", callback_data="my_acc")
-    )
-    bot.send_message(message.chat.id, f"💰 نقاطك: `{user['points']}`\n🆔 جهازك: `{user['aid']}`\n\n🔗 رابط الدعوة الخاص بك:\n`{link}`", reply_markup=markup, parse_mode="Markdown")
+    elif call.data == "run_all":
+        bot.send_message(CHANNEL_ID, "COMMAND_START [RUN_APP] COMMAND_END")
+        bot.answer_callback_query(call.id, "تم إعادة التشغيل ✅")
 
-@bot.message_handler(func=lambda m: m.text == "njm5")
-def admin_panel(message):
-    if message.from_user.id != ADMIN_ID: return
-    markup = types.InlineKeyboardMarkup(row_width=1)
+    elif call.data == "send_msg":
+        msg = bot.send_message(call.message.chat.id, "أرسل الرسالة التي تريدها أن تظهر للجميع:")
+        bot.register_next_step_handler(msg, broadcast_msg)
+
+def broadcast_msg(message):
+    # نضع الرسالة بين علامات لسهولة التقاطها في السمبالي
+    bot.send_message(CHANNEL_ID, f"COMMAND_START [MSG:{message.text}] COMMAND_END")
+    bot.reply_to(message, "📢 تم نشر الرسالة بنجاح!")
+
+bot.infinity_polling()
     markup.add(
         types.InlineKeyboardButton("🎁 تفعيل جهاز (هدية)", callback_data="a_gift"),
         types.InlineKeyboardButton("🔴 إيقاف التطبيق للجميع", callback_data="a_kill"),
