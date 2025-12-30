@@ -1,8 +1,19 @@
 import telebot
 from telebot import types
 import json, os, random, string
+from flask import Flask
+from threading import Thread
 
-# --- الإعدادات ---
+# --- إعدادات البقاء حياً للسيرفر ---
+app = Flask('')
+@app.route('/')
+def home(): return "نظام نجم الإبداع نشط!"
+def run(): app.run(host='0.0.0.0', port=8080)
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+
+# --- إعدادات البوت ---
 API_TOKEN = '8322095833:AAEq5gd2R3HiN9agRdX-R995vHXeWx2oT7g'
 CHANNEL_ID = "@nejm_njm" 
 ADMIN_ID = 7650083401 
@@ -12,59 +23,125 @@ bot = telebot.TeleBot(API_TOKEN)
 
 # --- إدارة البيانات ---
 def load_data():
-    if not os.path.exists(DATA_FILE):
-        return {"trials": [], "users": {}, "banned": []}
+    if not os.path.exists(DATA_FILE): return {"trials": [], "users": {}}
     try:
         with open(DATA_FILE, "r", encoding='utf-8') as f: return json.load(f)
-    except: return {"trials": [], "users": {}, "banned": []}
+    except: return {"trials": [], "users": {}}
 
 def save_data(data):
-    with open(DATA_FILE, "w", encoding='utf-8') as f: json.dump(data, f, indent=4, ensure_ascii=False)
+    with open(DATA_FILE, "w", encoding='utf-8') as f: 
+        json.dump(data, f, indent=4, ensure_ascii=False)
 
 def get_user(data, uid):
     uid = str(uid)
     if uid not in data["users"]:
-        data["users"][uid] = {"points": 0, "is_sub": False, "aid": "غير معروف", "invited_by": None}
+        data["users"][uid] = {"points": 0, "aid": "غير معروف", "invited_by": None}
     return data["users"][uid]
 
-def post_to_channel(android_id, plan="FOREVER"):
-    try:
-        msg = f"Device:{android_id} Life:{plan}"
-        bot.send_message(CHANNEL_ID, msg)
-        return True
-    except Exception as e:
-        print(f"Error: {e}")
-        return False
-
-# --- الأوامر ---
+# --- أوامر البوت ---
 @bot.message_handler(commands=['start'])
 def start(message):
     data = load_data()
     uid = str(message.from_user.id)
     user = get_user(data, uid)
     
-    # 1. نظام الدعوات (الريفيرال) لجمع النقاط
     if "ref_" in message.text and user["invited_by"] is None:
         inviter_id = message.text.split("ref_")[1]
         if inviter_id != uid:
             inviter = get_user(data, inviter_id)
-            inviter["points"] += 50  # إعطاء 50 نقطة لكل دعوة
+            inviter["points"] += 50 
             user["invited_by"] = inviter_id
-            bot.send_message(inviter_id, f"🌟 تم دخول شخص جديد عبر رابطك! حصلت على 50 نقطة.")
+            bot.send_message(inviter_id, "🌟 حصلت على 50 نقطة لدعوة شخص جديد!")
 
-    # 2. ربط الجهاز من التطبيق
     if "code_" in message.text:
-        aid = message.text.split("code_")[1]
-        user["aid"] = aid
-        bot.reply_to(message, f"✅ تم ربط جهازك بنجاح!\nID: `{aid}`", parse_mode="Markdown")
+        user["aid"] = message.text.split("code_")[1]
+        bot.reply_to(message, f"✅ تم ربط جهازك بنجاح:\n`{user['aid']}`", parse_mode="Markdown")
     
     save_data(data)
+    txt = "👋 أهلاً بك! أرسل (كود) لفتح القائمة."
+    if message.from_user.id == ADMIN_ID: txt += "\n\n🛠 أرسل (njm5) للوحة التحكم."
+    bot.send_message(message.chat.id, txt)
+
+@bot.message_handler(func=lambda m: m.text == "كود")
+def user_menu(message):
+    data = load_data()
+    user = get_user(data, message.from_user.id)
+    link = f"https://t.me/{(bot.get_me()).username}?start=ref_{message.from_user.id}"
     
-    # 3. إخفاء أمر المدير عن المستخدمين
-    welcome_text = "👋 أهلاً بك في بوت نجم الإبداع\n\nأرسل كلمة (كود) لفتح قائمة الخدمات."
-    if message.from_user.id == ADMIN_ID:
-        welcome_text += "\n\n🛠 ارسل كود  لفتح قايمت الاشتراك المجاني والمفدوع ."
-    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🎁 تجربة مجانية", callback_data="free"),
+        types.InlineKeyboardButton("🔄 تحويل النقاط", callback_data="swap"),
+        types.InlineKeyboardButton("👤 حسابي", callback_data="my_acc")
+    )
+    bot.send_message(message.chat.id, f"💰 نقاطك: `{user['points']}`\n🆔 جهازك: `{user['aid']}`\n\n🔗 رابط الدعوة الخاص بك:\n`{link}`", reply_markup=markup, parse_mode="Markdown")
+
+@bot.message_handler(func=lambda m: m.text == "njm5")
+def admin_panel(message):
+    if message.from_user.id != ADMIN_ID: return
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("🎁 تفعيل جهاز (هدية)", callback_data="a_gift"),
+        types.InlineKeyboardButton("🔴 إيقاف التطبيق للجميع", callback_data="a_kill"),
+        types.InlineKeyboardButton("🟢 تشغيل التطبيق للجميع", callback_data="a_on"),
+        types.InlineKeyboardButton("📢 إرسال تنبيه جماعي", callback_data="a_alert")
+    )
+    bot.send_message(message.chat.id, "🛠 **لوحة تحكم المدير**", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: True)
+def handle_calls(call):
+    data = load_data()
+    user = get_user(data, call.from_user.id)
+
+    if call.data == "free":
+        if str(call.from_user.id) in data["trials"]:
+            bot.answer_callback_query(call.id, "❌ استخدمت التجربة سابقاً!", show_alert=True)
+        elif user["aid"] == "غير معروف":
+            bot.answer_callback_query(call.id, "❌ اربط جهازك من التطبيق أولاً!", show_alert=True)
+        else:
+            data["trials"].append(str(call.from_user.id))
+            bot.send_message(CHANNEL_ID, f"Device:{user['aid']} Life:24H")
+            bot.send_message(call.message.chat.id, "✅ تم تفعيل 24 ساعة!")
+            save_data(data)
+
+    elif call.data == "swap":
+        if user["points"] >= 500 and user["aid"] != "غير معروف":
+            user["points"] -= 500
+            bot.send_message(CHANNEL_ID, f"Device:{user['aid']} Life:FOREVER")
+            bot.send_message(call.message.chat.id, "✅ تم استبدال النقاط بتفعيل دائم!")
+            save_data(data)
+        else:
+            bot.answer_callback_query(call.id, "❌ نقاط غير كافية!", show_alert=True)
+
+    elif call.data == "a_kill":
+        bot.send_message(CHANNEL_ID, "APP_STATUS:OFF")
+        bot.answer_callback_query(call.id, "🚫 تم إغلاق التطبيق عند الجميع!", show_alert=True)
+
+    elif call.data == "a_on":
+        bot.send_message(CHANNEL_ID, "APP_STATUS:ON")
+        bot.answer_callback_query(call.id, "✅ تم إعادة التشغيل للجميع!", show_alert=True)
+
+    elif call.data == "a_alert":
+        msg = bot.send_message(call.message.chat.id, "أرسل نص التنبيه الذي سيظهر للمستخدمين:")
+        bot.register_next_step_handler(msg, process_alert)
+
+    elif call.data == "a_gift":
+        msg = bot.send_message(call.message.chat.id, "أرسل الـ Android ID للتفعيل الفوري:")
+        bot.register_next_step_handler(msg, admin_gift)
+
+    bot.answer_callback_query(call.id)
+
+def process_alert(message):
+    bot.send_message(CHANNEL_ID, f"ALERT_MSG:{message.text}")
+    bot.reply_to(message, "📢 تم نشر التنبيه الجماعي!")
+
+def admin_gift(message):
+    bot.send_message(CHANNEL_ID, f"Device:{message.text.strip()} Life:FOREVER")
+    bot.reply_to(message, "✅ تم منح التفعيل الهدية!")
+
+if __name__ == "__main__":
+    keep_alive()
+    bot.infinity_polling()
     bot.send_message(message.chat.id, welcome_text)
 
 @bot.message_handler(func=lambda m: m.text == "كود")
