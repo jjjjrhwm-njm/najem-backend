@@ -1,70 +1,55 @@
 import telebot
-from telebot import types
-import json, os, random, string
-from flask import Flask
-from threading import Thread
+import json
 
-# --- إعدادات البقاء حياً للسيرفر ---
-app = Flask('')
-@app.route('/')
-def home(): return "نظام نجم الإبداع نشط!"
-def run(): app.run(host='0.0.0.0', port=8080)
-def keep_alive():
-    t = Thread(target=run)
-    t.start()
-
-# --- إعدادات البوت ---
-API_TOKEN = '8322095833:AAEq5gd2R3HiN9agRdX-R995vHXeWx2oT7g'
-CHANNEL_ID = "@nejm_njm" 
-ADMIN_ID = 7650083401 
-DATA_FILE = "bot_data.json"
-
+API_TOKEN = 'YOUR_BOT_TOKEN'
 bot = telebot.TeleBot(API_TOKEN)
 
-# --- إدارة البيانات ---
-def load_data():
-    if not os.path.exists(DATA_FILE): return {"trials": [], "users": {}}
-    try:
-        with open(DATA_FILE, "r", encoding='utf-8') as f: return json.load(f)
-    except: return {"trials": [], "users": {}}
+# إعدادات افتراضية
+app_config = {
+    "is_stopped": False,
+    "message": "",
+    "is_premium": True, # تفعيل الشراء للجميع
+    "update_url": "https://t.me/your_channel"
+}
 
-def save_data(data):
-    with open(DATA_FILE, "w", encoding='utf-8') as f: 
-        json.dump(data, f, indent=4, ensure_ascii=False)
-
-def get_user(data, uid):
-    uid = str(uid)
-    if uid not in data["users"]:
-        data["users"][uid] = {"points": 0, "aid": "غير معروف", "invited_by": None}
-    return data["users"][uid]
-
-# --- أوامر البوت ---
 @bot.message_handler(commands=['start'])
-def start(message):
-    data = load_data()
-    uid = str(message.from_user.id)
-    user = get_user(data, uid)
-    
-    if "ref_" in message.text and user["invited_by"] is None:
-        inviter_id = message.text.split("ref_")[1]
-        if inviter_id != uid:
-            inviter = get_user(data, inviter_id)
-            inviter["points"] += 50 
-            user["invited_by"] = inviter_id
-            bot.send_message(inviter_id, "🌟 حصلت على 50 نقطة لدعوة شخص جديد!")
+def send_welcome(message):
+    help_text = """
+    اهلا بك في لوحة تحكم التطبيق:
+    1. /stop_all - إيقاف التطبيق عن الجميع
+    2. /run_all - تشغيل التطبيق للجميع
+    3. /msg [النص] - إرسال رسالة تظهر عند دخول التطبيق
+    4. /free_on - تفعيل الميزات المدفوعة للكل
+    5. /free_off - إيقاف الميزات المدفوعة
+    """
+    bot.reply_to(message, help_text)
 
-    if "code_" in message.text:
-        user["aid"] = message.text.split("code_")[1]
-        bot.reply_to(message, f"✅ تم ربط جهازك بنجاح:\n`{user['aid']}`", parse_mode="Markdown")
-    
-    save_data(data)
-    txt = "👋 أهلاً بك! أرسل (كود) لفتح القائمة."
-    if message.from_user.id == ADMIN_ID: txt += "\n\n🛠 أرسل (njm5) للوحة التحكم."
-    bot.send_message(message.chat.id, txt)
+@bot.message_handler(commands=['stop_all'])
+def stop_app(message):
+    app_config["is_stopped"] = True
+    save_config()
+    bot.reply_to(message, "تم إيقاف التطبيق عن الجميع 🛑")
 
-@bot.message_handler(func=lambda m: m.text == "كود")
-def user_menu(message):
-    data = load_data()
+@bot.message_handler(commands=['run_all'])
+def run_app(message):
+    app_config["is_stopped"] = False
+    app_config["message"] = ""
+    save_config()
+    bot.reply_to(message, "تم تشغيل التطبيق بنجاح ✅")
+
+@bot.message_handler(commands=['msg'])
+def set_msg(message):
+    msg_text = message.text.replace('/msg ', '')
+    app_config["message"] = msg_text
+    save_config()
+    bot.reply_to(message, f"تم ضبط الرسالة: {msg_text}")
+
+def save_config():
+    with open('config.json', 'w') as f:
+        json.dump(app_config, f)
+    # هنا يجب أن يرفع الملف إلى سيرفرك الخاص ليكون الرابط مباشر
+
+bot.polling()
     user = get_user(data, message.from_user.id)
     link = f"https://t.me/{(bot.get_me()).username}?start=ref_{message.from_user.id}"
     
