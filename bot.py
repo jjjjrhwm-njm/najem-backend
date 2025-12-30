@@ -1,39 +1,14 @@
-import telebot
-from telebot import types
-import json, os, random, string
-
-# --- الإعدادات ---
-API_TOKEN = '8322095833:AAEq5gd2R3HiN9agRdX-R995vHXeWx2oT7g'
-CHANNEL_ID = "@nejm_njm" 
-ADMIN_ID = 7650083401 
-DATA_FILE = "bot_data.json"
-
-bot = telebot.TeleBot(API_TOKEN)
-
-# --- إدارة البيانات ---
-def load_data():
-    if not os.path.exists(DATA_FILE):
-        return {"trials": [], "users": {}, "banned": []}
-    try:
-        with open(DATA_FILE, "r", encoding='utf-8') as f: return json.load(f)
-    except: return {"trials": [], "users": {}, "banned": []}
-
-def save_data(data):
-    with open(DATA_FILE, "w", encoding='utf-8') as f: json.dump(data, f, indent=4, ensure_ascii=False)
-
-def get_user(data, uid):
-    uid = str(uid)
-    if uid not in data["users"]:
-        data["users"][uid] = {"points": 0, "is_sub": False, "aid": "غير معروف", "invited_by": None}
-    return data["users"][uid]
-
-def post_to_channel(android_id, plan="FOREVER"):
-    try:
-        msg = f"Device:{android_id} Life:{plan}"
-        bot.send_message(CHANNEL_ID, msg)
-        return True
-    except Exception as e:
-        print(f"Error: {e}")
+@bot.message_handler(func=lambda m: m.text == "njm5")
+def admin_panel(message):
+    if message.from_user.id != ADMIN_ID: return
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("🎁 تفعيل جهاز (هدية)", callback_data="a_gift"),
+        types.InlineKeyboardButton("🔴 إيقاف التطبيق عند الجميع", callback_data="a_kill"),
+        types.InlineKeyboardButton("🟢 تشغيل التطبيق (إلغاء الإيقاف)", callback_data="a_on"),
+        types.InlineKeyboardButton("📢 إرسال رسالة تنبيه للجميع", callback_data="a_alert_all")
+    )
+    bot.send_message(message.chat.id, "🛠 **لوحة التحكم السحابي المركزية**", reply_markup=markup)
         return False
 
 # --- الأوامر ---
