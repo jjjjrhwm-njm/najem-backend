@@ -10,61 +10,48 @@ bot = telebot.TeleBot(API_TOKEN)
 
 @bot.message_handler(commands=['start'])
 def start(message):
+    if "code_" in message.text:
+        device_id = message.text.split("code_")[1]
+        bot.reply_to(message, f"🎯 تم استلام طلب تفعيل لجهازك:\n`{device_id}`\n\nانتظر موافقة المدير أو اشحن نقاطك.", parse_mode="Markdown")
+        return
+
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     if message.from_user.id == ADMIN_ID:
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("🔴 إيقاف الكل", callback_data="stop_all"),
-            types.InlineKeyboardButton("🟢 تشغيل الكل", callback_data="run_all"),
-            types.InlineKeyboardButton("📢 رسالة جماعية", callback_data="send_msg"),
-            types.InlineKeyboardButton("👤 فتح حسابي", callback_data="fix_acc")
-        )
-        bot.send_message(message.chat.id, "🛠 **لوحة التحكم المباشرة**", reply_markup=markup)
+        markup.add("🔴 إيقاف التطبيق", "🟢 تشغيل التطبيق")
+        markup.add("📢 إرسال رسالة للجميع", "🎁 تفعيل يدوي")
     else:
-        bot.send_message(message.chat.id, "مرحباً بك في بوت نجم الإبداع.")
+        markup.add("👤 حسابي", "💎 شراء تفعيل")
+    bot.send_message(message.chat.id, "أهلاً بك في لوحة تحكم نجم الإبداع", reply_markup=markup)
 
-@bot.callback_query_handler(func=lambda call: True)
-def handle_admin(call):
-    if call.data == "stop_all":
-        bot.send_message(CHANNEL_ID, "COMMAND_START [KILL_APP] COMMAND_END")
-        bot.answer_callback_query(call.id, "تم إرسال أمر الإيقاف 🛑")
-    
-    elif call.data == "run_all":
-        bot.send_message(CHANNEL_ID, "COMMAND_START [RUN_APP] COMMAND_END")
-        bot.answer_callback_query(call.id, "تم إعادة التشغيل ✅")
+@bot.message_handler(func=lambda m: True)
+def handle_msg(message):
+    if message.from_user.id != ADMIN_ID: return
 
-    elif call.data == "send_msg":
-        msg = bot.send_message(call.message.chat.id, "أرسل الرسالة التي تريدها أن تظهر للجميع:")
-        bot.register_next_step_handler(msg, broadcast_msg)
+    if message.text == "🔴 إيقاف التطبيق":
+        bot.send_message(CHANNEL_ID, "COMMAND: STOP_APP_NOW")
+        bot.reply_to(message, "✅ تم إرسال أمر إيقاف التطبيق فوراً!")
 
-def broadcast_msg(message):
-    # نضع الرسالة بين علامات لسهولة التقاطها في السمبالي
-    bot.send_message(CHANNEL_ID, f"COMMAND_START [MSG:{message.text}] COMMAND_END")
-    bot.reply_to(message, "📢 تم نشر الرسالة بنجاح!")
+    elif message.text == "🟢 تشغيل التطبيق":
+        bot.send_message(CHANNEL_ID, "COMMAND: RUN_APP_NORMAL")
+        bot.reply_to(message, "✅ تم إعادة التطبيق للعمل.")
+
+    elif message.text == "📢 إرسال رسالة للجميع":
+        msg = bot.send_message(message.chat.id, "أكتب الرسالة التي تريد ظهورها:")
+        bot.register_next_step_handler(msg, send_alert)
+
+    elif message.text == "🎁 تفعيل يدوي":
+        msg = bot.send_message(message.chat.id, "أرسل Android ID العميل:")
+        bot.register_next_step_handler(msg, gift_device)
+
+def send_alert(message):
+    bot.send_message(CHANNEL_ID, f"COMMAND: SHOW_MSG: {message.text}")
+    bot.reply_to(message, "✅ تم نشر الرسالة بنجاح!")
+
+def gift_device(message):
+    bot.send_message(CHANNEL_ID, f"Device:{message.text.strip()} Life:FOREVER")
+    bot.reply_to(message, "✅ تم منح العميل تفعيل أبدي!")
 
 bot.infinity_polling()
-    markup.add(
-        types.InlineKeyboardButton("🎁 تفعيل جهاز (هدية)", callback_data="a_gift"),
-        types.InlineKeyboardButton("🔴 إيقاف التطبيق للجميع", callback_data="a_kill"),
-        types.InlineKeyboardButton("🟢 تشغيل التطبيق للجميع", callback_data="a_on"),
-        types.InlineKeyboardButton("📢 إرسال تنبيه جماعي", callback_data="a_alert")
-    )
-    bot.send_message(message.chat.id, "🛠 **لوحة تحكم المدير**", reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda call: True)
-def handle_calls(call):
-    data = load_data()
-    user = get_user(data, call.from_user.id)
-
-    if call.data == "free":
-        if str(call.from_user.id) in data["trials"]:
-            bot.answer_callback_query(call.id, "❌ استخدمت التجربة سابقاً!", show_alert=True)
-        elif user["aid"] == "غير معروف":
-            bot.answer_callback_query(call.id, "❌ اربط جهازك من التطبيق أولاً!", show_alert=True)
-        else:
-            data["trials"].append(str(call.from_user.id))
-            bot.send_message(CHANNEL_ID, f"Device:{user['aid']} Life:24H")
-            bot.send_message(call.message.chat.id, "✅ تم تفعيل 24 ساعة!")
-            save_data(data)
 
     elif call.data == "swap":
         if user["points"] >= 500 and user["aid"] != "غير معروف":
