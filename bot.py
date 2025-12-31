@@ -1,126 +1,161 @@
-import telebot, json, time, os
+import telebot, json, os, time, secrets
 from flask import Flask, request, jsonify
 from threading import Thread
 
-# ====== الإعدادات ======
-BOT_TOKEN = "PUT_YOUR_TOKEN"
+API_TOKEN = "PUT_YOUR_TOKEN"
 ADMIN_ID = 7650083401
-DATA_FILE = "db.json"
+DATA_FILE = "njm_db.json"
 
-bot = telebot.TeleBot(BOT_TOKEN)
+bot = telebot.TeleBot(API_TOKEN)
 app = Flask(__name__)
 
-# ====== قاعدة البيانات ======
+# ================= DATABASE =================
 def load():
     if not os.path.exists(DATA_FILE):
         return {
             "users": {},
             "banned": [],
-            "maintenance": False,
-            "broadcast": "",
-            "version": "1.0",
-            "update_url": ""
+            "codes": {},
+            "config": {
+                "maintenance": False,
+                "version": "1.0",
+                "update_url": "https://t.me/nejm_njm",
+                "broadcast": "مرحبا بك 🌟"
+            }
         }
     return json.load(open(DATA_FILE))
 
-def save(db):
-    json.dump(db, open(DATA_FILE,"w"), indent=2)
+def save(d): json.dump(d, open(DATA_FILE,"w"), indent=2)
 
-# ====== API للتطبيق ======
-@app.route("/sync")
-def sync():
-    uid = request.args.get("uid")
+# ================= API =================
+@app.route("/check")
+def check():
+    aid = request.args.get("aid")
+    ver = request.args.get("ver")
     db = load()
 
-    if uid in db["banned"]:
+    if aid in db["banned"]:
         return jsonify({"status":"banned"})
 
-    if uid not in db["users"]:
-        db["users"][uid] = {
-            "sub_until": time.time() + 86400,
-            "points": 0
-        }
-        save(db)
+    if db["config"]["maintenance"]:
+        return jsonify({"status":"maintenance"})
 
-    user = db["users"][uid]
+    if ver != db["config"]["version"]:
+        return jsonify({
+            "status":"update",
+            "url": db["config"]["update_url"]
+        })
+
+    user = db["users"].get(aid)
+    if not user:
+        return jsonify({"status":"no_sub"})
+
+    if time.time() > user["expire"]:
+        return jsonify({"status":"expired"})
 
     return jsonify({
         "status":"ok",
-        "maintenance": db["maintenance"],
-        "broadcast": db["broadcast"],
-        "version": db["version"],
-        "update_url": db["update_url"],
-        "sub_until": user["sub_until"],
-        "points": user["points"]
+        "expire": user["expire"],
+        "points": user["points"],
+        "broadcast": db["config"]["broadcast"]
     })
 
-# ====== أوامر البوت ======
+# ================= BOT =================
 @bot.message_handler(commands=["start"])
 def start(m):
-    if m.from_user.id != ADMIN_ID: return
-    kb = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add("📢 بث", "🛠 صيانة")
-    kb.add("🚫 حظر", "🎁 هدية اشتراك")
-    kb.add("🆙 تحديث")
-    bot.send_message(m.chat.id,"👑 لوحة التحكم",reply_markup=kb)
+    if m.from_user.id == ADMIN_ID:
+        bot.send_message(m.chat.id,
+        "👑 لوحة تحكم NJM\n\n"
+        "/broadcast\n"
+        "/maintenance\n"
+        "/update\n"
+        "/gift\n"
+        "/ban\n"
+        "/unban\n"
+        "/stats")
+    else:
+        bot.send_message(m.chat.id,
+        "👋 مرحبا\n"
+        "💎 اشتراك شهري = 100 نجمة\n"
+        "🎁 تجريبي يوم واحد\n"
+        "🧩 اجمع نقاط بالدعوة")
 
-@bot.message_handler(func=lambda m:m.text=="📢 بث")
+# ---------- ADMIN ----------
+@bot.message_handler(commands=["broadcast"])
 def bc(m):
-    msg = bot.send_message(m.chat.id,"اكتب الرسالة")
+    if m.from_user.id!=ADMIN_ID: return
+    msg = bot.send_message(m.chat.id,"اكتب الإذاعة:")
     bot.register_next_step_handler(msg,save_bc)
 
 def save_bc(m):
     db=load()
-    db["broadcast"]=m.text
+    db["config"]["broadcast"]=m.text
     save(db)
     bot.send_message(m.chat.id,"✅ تم")
 
-@bot.message_handler(func=lambda m:m.text=="🛠 صيانة")
+@bot.message_handler(commands=["maintenance"])
 def mt(m):
+    if m.from_user.id!=ADMIN_ID: return
     db=load()
-    db["maintenance"]=not db["maintenance"]
+    db["config"]["maintenance"]=not db["config"]["maintenance"]
     save(db)
-    bot.send_message(m.chat.id,"🔁 تم التغيير")
+    bot.send_message(m.chat.id,f"🛠 الصيانة = {db['config']['maintenance']}")
 
-@bot.message_handler(func=lambda m:m.text=="🚫 حظر")
+@bot.message_handler(commands=["update"])
+def upd(m):
+    if m.from_user.id!=ADMIN_ID: return
+    msg=bot.send_message(m.chat.id,"الإصدار الجديد:")
+    bot.register_next_step_handler(msg,upd2)
+
+def upd2(m):
+    db=load()
+    db["config"]["version"]=m.text
+    save(db)
+    bot.send_message(m.chat.id,"⬆️ تحديث إجباري جاهز")
+
+@bot.message_handler(commands=["gift"])
+def gift(m):
+    if m.from_user.id!=ADMIN_ID: return
+    msg=bot.send_message(m.chat.id,"AndroidID + أيام")
+    bot.register_next_step_handler(msg,gift2)
+
+def gift2(m):
+    aid,days=m.text.split()
+    db=load()
+    db["users"][aid]={
+        "expire":time.time()+int(days)*86400,
+        "points":0
+    }
+    save(db)
+    bot.send_message(m.chat.id,"🎁 تم الإهداء")
+
+@bot.message_handler(commands=["ban"])
 def ban(m):
-    msg=bot.send_message(m.chat.id,"أرسل UID")
-    bot.register_next_step_handler(msg,do_ban)
+    if m.from_user.id!=ADMIN_ID: return
+    msg=bot.send_message(m.chat.id,"AndroidID:")
+    bot.register_next_step_handler(msg,ban2)
 
-def do_ban(m):
+def ban2(m):
     db=load()
     db["banned"].append(m.text)
     save(db)
     bot.send_message(m.chat.id,"🚫 محظور")
 
-@bot.message_handler(func=lambda m:m.text=="🎁 هدية اشتراك")
-def gift(m):
-    msg=bot.send_message(m.chat.id,"UID + أيام\nمثال:\nABC123 7")
-    bot.register_next_step_handler(msg,do_gift)
+@bot.message_handler(commands=["unban"])
+def unban(m):
+    if m.from_user.id!=ADMIN_ID: return
+    msg=bot.send_message(m.chat.id,"AndroidID:")
+    bot.register_next_step_handler(msg,unban2)
 
-def do_gift(m):
-    uid,days=m.text.split()
+def unban2(m):
     db=load()
-    db["users"][uid]["sub_until"]=time.time()+int(days)*86400
+    db["banned"].remove(m.text)
     save(db)
-    bot.send_message(m.chat.id,"🎉 تم")
+    bot.send_message(m.chat.id,"✅ فك الحظر")
 
-@bot.message_handler(func=lambda m:m.text=="🆙 تحديث")
-def upd(m):
-    msg=bot.send_message(m.chat.id,"version | url")
-    bot.register_next_step_handler(msg,do_upd)
-
-def do_upd(m):
-    v,u=m.text.split("|")
-    db=load()
-    db["version"]=v.strip()
-    db["update_url"]=u.strip()
-    save(db)
-    bot.send_message(m.chat.id,"⬆️ جاهز")
-
-# ====== تشغيل ======
-def run_api():
+# ================= RUN =================
+def run():
     app.run("0.0.0.0",8080)
 
-Thread(target=run_api).start()
+Thread(target=run).start()
 bot.infinity_polling()
