@@ -1,79 +1,126 @@
-import telebot
-from telebot import types
-import json, os, time, datetime
-from flask import Flask, request
+import telebot, json, time, os
+from flask import Flask, request, jsonify
 from threading import Thread
 
-# --- إعدادات نجم الإبداع ---
-API_TOKEN = '8322095833:AAEq5gd2R3HiN9agRdX-R995vHXeWx2oT7g'
+# ====== الإعدادات ======
+BOT_TOKEN = "PUT_YOUR_TOKEN"
 ADMIN_ID = 7650083401
-DATA_FILE = "njm_database.json"
+DATA_FILE = "db.json"
 
-bot = telebot.TeleBot(API_TOKEN)
+bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
-# --- إدارة قاعدة البيانات ---
-def load_db():
+# ====== قاعدة البيانات ======
+def load():
     if not os.path.exists(DATA_FILE):
-        return {"users": {}, "config": {"mt": "0", "msg": "أهلاً بك", "ver": "1.0", "url": "https://t.me/nejm_njm"}}
-    with open(DATA_FILE, "r") as f: return json.load(f)
+        return {
+            "users": {},
+            "banned": [],
+            "maintenance": False,
+            "broadcast": "",
+            "version": "1.0",
+            "update_url": ""
+        }
+    return json.load(open(DATA_FILE))
 
-def save_db(db):
-    with open(DATA_FILE, "w") as f: json.dump(db, f, indent=4)
+def save(db):
+    json.dump(db, open(DATA_FILE,"w"), indent=2)
 
-# --- بروتوكول الربط (API) ---
-@app.route('/check')
-def check():
-    aid = request.args.get('aid', 'unknown')
-    db = load_db()
-    
-    if aid not in db["users"]:
-        db["users"][aid] = {"points": 0, "exp": 0, "banned": False, "refs": 0}
-        save_db(db)
-    
-    user = db["users"][aid]
-    status = "FREE"
-    if user["banned"]: status = "BANNED"
-    elif user["exp"] > time.time(): status = "PREMIUM"
-    
-    # تنسيق الرد الاحترافي: صيانة|رسالة|نسخة|رابط|حالة|نقاط|وقت_الانتهاء
-    res = f"{db['config']['mt']}|{db['config']['msg']}|{db['config']['ver']}|{db['config']['url']}|{status}|{user['points']}|{user['exp']}"
-    return res
+# ====== API للتطبيق ======
+@app.route("/sync")
+def sync():
+    uid = request.args.get("uid")
+    db = load()
 
-# --- لوحة المدير العليا (njm5) ---
-@bot.message_handler(func=lambda m: m.text == "njm5")
-def admin_menu(m):
+    if uid in db["banned"]:
+        return jsonify({"status":"banned"})
+
+    if uid not in db["users"]:
+        db["users"][uid] = {
+            "sub_until": time.time() + 86400,
+            "points": 0
+        }
+        save(db)
+
+    user = db["users"][uid]
+
+    return jsonify({
+        "status":"ok",
+        "maintenance": db["maintenance"],
+        "broadcast": db["broadcast"],
+        "version": db["version"],
+        "update_url": db["update_url"],
+        "sub_until": user["sub_until"],
+        "points": user["points"]
+    })
+
+# ====== أوامر البوت ======
+@bot.message_handler(commands=["start"])
+def start(m):
     if m.from_user.id != ADMIN_ID: return
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add("📊 الإحصائيات", "🛠 تبديل الصيانة")
-    markup.add("📢 تحديث الإذاعة", "🆙 وضع رابط تحديث")
-    markup.add("🎁 إهداء اشتراك", "🚫 حظر/فك حظر")
-    bot.send_message(m.chat.id, "👑 أهلاً يا نجم الإبداع. اختر أمر التحكم:", reply_markup=markup)
+    kb = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("📢 بث", "🛠 صيانة")
+    kb.add("🚫 حظر", "🎁 هدية اشتراك")
+    kb.add("🆙 تحديث")
+    bot.send_message(m.chat.id,"👑 لوحة التحكم",reply_markup=kb)
 
-# --- لوحة المستخدمين (كود) ---
-@bot.message_handler(func=lambda m: m.text == "كود")
-def user_menu(m):
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("💎 شراء (100 نجمة)", callback_data="buy_month"))
-    markup.add(types.InlineKeyboardButton("🎁 تجربة (يوم مجاني)", callback_data="free_trial"))
-    markup.add(types.InlineKeyboardButton("🔗 تجميع نقاط", callback_data="collect_points"))
-    bot.send_message(m.chat.id, "📱 لوحة التحكم في اشتراكك:", reply_markup=markup)
+@bot.message_handler(func=lambda m:m.text=="📢 بث")
+def bc(m):
+    msg = bot.send_message(m.chat.id,"اكتب الرسالة")
+    bot.register_next_step_handler(msg,save_bc)
 
-# --- ميزة أدهشني: نظام الإحالة (Referral) ---
-@bot.callback_query_handler(func=lambda call: call.data == "collect_points")
-def referral_link(call):
-    ref_link = f"https://t.me/{bot.get_me().username}?start={call.from_user.id}"
-    bot.send_message(call.message.chat.id, f"🔗 شارك رابطك: {ref_link}\nادعُ 2 من أصدقائك للحصول على 3 أيام اشتراك مجاناً!")
+def save_bc(m):
+    db=load()
+    db["broadcast"]=m.text
+    save(db)
+    bot.send_message(m.chat.id,"✅ تم")
 
-# --- معالجة الدفع والاشتراكات ---
-@bot.callback_query_handler(func=lambda call: call.data in ["buy_month", "free_trial"])
-def handle_subs(call):
-    db = load_db()
-    # هنا يتم إضافة المنطق الخاص بمعرف الجهاز المرتبط بالتليجرام
-    bot.answer_callback_query(call.id, "سيتم التفعيل فور ربط الـ Android ID")
+@bot.message_handler(func=lambda m:m.text=="🛠 صيانة")
+def mt(m):
+    db=load()
+    db["maintenance"]=not db["maintenance"]
+    save(db)
+    bot.send_message(m.chat.id,"🔁 تم التغيير")
 
-# --- تشغيل السيرفر المتوافق مع Render ---
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    Thread(target=lambda: app.run(host='0.0.0.0', port=port)).start()
-    bot.infinity_polling()
+@bot.message_handler(func=lambda m:m.text=="🚫 حظر")
+def ban(m):
+    msg=bot.send_message(m.chat.id,"أرسل UID")
+    bot.register_next_step_handler(msg,do_ban)
+
+def do_ban(m):
+    db=load()
+    db["banned"].append(m.text)
+    save(db)
+    bot.send_message(m.chat.id,"🚫 محظور")
+
+@bot.message_handler(func=lambda m:m.text=="🎁 هدية اشتراك")
+def gift(m):
+    msg=bot.send_message(m.chat.id,"UID + أيام\nمثال:\nABC123 7")
+    bot.register_next_step_handler(msg,do_gift)
+
+def do_gift(m):
+    uid,days=m.text.split()
+    db=load()
+    db["users"][uid]["sub_until"]=time.time()+int(days)*86400
+    save(db)
+    bot.send_message(m.chat.id,"🎉 تم")
+
+@bot.message_handler(func=lambda m:m.text=="🆙 تحديث")
+def upd(m):
+    msg=bot.send_message(m.chat.id,"version | url")
+    bot.register_next_step_handler(msg,do_upd)
+
+def do_upd(m):
+    v,u=m.text.split("|")
+    db=load()
+    db["version"]=v.strip()
+    db["update_url"]=u.strip()
+    save(db)
+    bot.send_message(m.chat.id,"⬆️ جاهز")
+
+# ====== تشغيل ======
+def run_api():
+    app.run("0.0.0.0",8080)
+
+Thread(target=run_api).start()
+bot.infinity_polling()
