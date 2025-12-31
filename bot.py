@@ -1,119 +1,112 @@
 import telebot
 from telebot import types
 import json, os, time
-from flask import Flask
+from flask import Flask, request, jsonify
 from threading import Thread
 
-# --- تشغيل السيرفر ---
-app = Flask('')
-@app.route('/')
-def home(): return "NJM System Online"
-def run(): app.run(host='0.0.0.0', port=8080)
-def keep_alive(): Thread(target=run).start()
-
-# --- إعدادات البوت ---
+# --- إعدادات النظام ---
 API_TOKEN = '8322095833:AAEq5gd2R3HiN9agRdX-R995vHXeWx2oT7g'
-CHANNEL_ID = "@nejm_njm" # تأكد أنها قناة عامة Public
-ADMIN_ID = 7650083401 
-
+ADMIN_ID = 7650083401
+CHANNEL_ID = "@nejm_njm"
+DATA_FILE = "njm_master_db.json"
 bot = telebot.TeleBot(API_TOKEN)
+app = Flask(__name__)
 
-def load_db():
-    if not os.path.exists("njm_pro.json"): return {"users": {}, "trials": [], "banned": []}
-    with open("njm_pro.json", "r") as f: return json.load(f)
+# --- قاعدة البيانات ---
+def get_db():
+    if not os.path.exists(DATA_FILE):
+        return {
+            "users": {}, "banned": [], "trials": [],
+            "config": {
+                "maintenance": False,
+                "broadcast": "",
+                "version": "1.0",
+                "update_url": "https://t.me/nejm_njm",
+                "active_pings": {}
+            }
+        }
+    with open(DATA_FILE, "r") as f: return json.load(f)
 
 def save_db(db):
-    with open("njm_pro.json", "w") as f: json.dump(db, f, indent=4)
+    with open(DATA_FILE, "w") as f: json.dump(db, f, indent=4)
 
-# --- دالة الإرسال للقناة (معدلة لتجنب مشاكل HTML) ---
-def post_status(aid, days):
-    # نرسل النص بدون Markdown في الأسطر الحساسة لضمان قراءتها من Smali
-    txt = "💎 NJM SYSTEM\n"
-    txt += f"Device:{aid}\n"
-    txt += f"Plan:{days}\n"
-    txt += "Status:ACTIVE"
-    bot.send_message(CHANNEL_ID, txt)
+# --- API للتطبيق (انسجام تام) ---
+@app.route('/njm_api', methods=['GET'])
+def njm_api():
+    db = get_db()
+    aid = request.args.get('aid')
+    uid = request.args.get('uid')
+    
+    # تحديث النشاط (Active Users)
+    if aid: db["config"]["active_pings"][aid] = time.time()
+    save_db(db)
+    
+    # تجهيز الرد الذكي للتطبيق
+    res = {
+        "maintenance": db["config"]["maintenance"],
+        "broadcast": db["config"]["broadcast"],
+        "version": db["config"]["version"],
+        "update_url": db["config"]["update_url"],
+        "is_banned": aid in db["banned"],
+        "active_users": len([t for t in db["config"]["active_pings"].values() if time.time() - t < 60])
+    }
+    return jsonify(res)
 
-# --- الأوامر ---
+# --- لوحة التحكم (Telegram Bot) ---
 @bot.message_handler(commands=['start'])
 def start(m):
-    db = load_db()
+    db = get_db()
     uid = str(m.from_user.id)
-    if uid in db["banned"]: return
     if uid not in db["users"]: db["users"][uid] = {"pts": 0, "aid": "NONE"}
-    
     if "code_" in m.text:
         db["users"][uid]["aid"] = m.text.split("code_")[1]
-        bot.reply_to(m, "✅ تم ربط جهازك بنظام نجم الإبداع.")
-    
+        bot.reply_to(m, "🎯 تم ربط الجهاز بالمنظومة.")
     save_db(db)
-    bot.send_message(m.chat.id, f"👋 أهلاً بك {m.from_user.first_name}\nأرسل كلمة (كود) لفتح اللوحة.")
+    bot.send_message(m.chat.id, "👋 نظام نجم الإبداع المتكامل.\nأرسل (كود) للمستخدم أو (njm5) للمدير.")
 
 @bot.message_handler(func=lambda m: m.text == "كود")
-def menu(m):
-    db = load_db()
-    uid = str(m.from_user.id)
-    u = db["users"].get(uid)
+def user_menu(m):
+    db = get_db()
+    u = db["users"].get(str(m.from_user.id), {"pts": 0, "aid": "NONE"})
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🎁 تجربة (1 يوم)", callback_data="p_1"))
-    markup.add(types.InlineKeyboardButton("⭐ شراء شهر (100 نجمة)", callback_data="p_30"))
+    markup.add(types.InlineKeyboardButton("🎁 تجربة 24 ساعة", callback_data="trial"))
+    markup.add(types.InlineKeyboardButton("⭐ شراء شهر (100 نجمة)", callback_data="buy"))
     bot.send_message(m.chat.id, f"👤 حسابك:\n🆔 جهازك: `{u['aid']}`\n💰 نقاطك: `{u['pts']}`", reply_markup=markup, parse_mode="Markdown")
 
-# --- لوحة المدير ---
 @bot.message_handler(func=lambda m: m.text == "njm5" and m.from_user.id == ADMIN_ID)
-def admin(m):
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("📢 إذاعة (نشر للكل)", callback_data="a_bc"))
-    markup.add(types.InlineKeyboardButton("🎁 إهداء تفعيل", callback_data="a_gift"))
-    bot.send_message(m.chat.id, "👑 لوحة الإدارة العليا - نجم الإبداع", reply_markup=markup)
+def admin_menu(m):
+    db = get_db()
+    active = len([t for t in db["config"]["active_pings"].values() if time.time() - t < 60])
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📢 إذاعة", callback_data="m_bc"),
+        types.InlineKeyboardButton("🛠 صيانة: " + ("ON" if db["config"]["maintenance"] else "OFF"), callback_data="m_mt"),
+        types.InlineKeyboardButton("🚫 حظر جهاز", callback_data="m_ban"),
+        types.InlineKeyboardButton("✅ فك حظر", callback_data="m_unban"),
+        types.InlineKeyboardButton("🆙 تحديث الإصدار", callback_data="m_upd")
+    )
+    bot.send_message(m.chat.id, f"👑 **لوحة السيادة**\n👥 المتصلون الآن: `{active}`", reply_markup=markup, parse_mode="Markdown")
 
-@bot.callback_query_handler(func=lambda c: True)
-def calls(c):
-    db = load_db()
-    uid = str(c.from_user.id)
-    u = db["users"].get(uid)
-    
-    if c.data == "p_1":
-        if u["aid"] == "NONE": return bot.answer_callback_query(c.id, "❌ اربط جهازك أولاً")
-        post_status(u["aid"], 1)
-        bot.send_message(c.message.chat.id, "✅ تم إرسال طلب التفعيل لليوم! اضغط (تحقق) في التطبيق.")
-    
-    elif c.data == "p_30":
-        if u["aid"] == "NONE": return bot.answer_callback_query(c.id, "❌ اربط جهازك أولاً")
-        prices = [types.LabeledPrice(label="تفعيل 30 يوم", amount=100)]
-        bot.send_invoice(c.message.chat.id, "اشتراك شهر", "تفعيل تطبيق نجم الإبداع", "sub_30", "", "XTR", prices)
+@bot.callback_query_handler(func=lambda c: c.data.startswith("m_"))
+def admin_actions(c):
+    db = get_db()
+    if c.data == "m_mt":
+        db["config"]["maintenance"] = not db["config"]["maintenance"]
+        save_db(db)
+        bot.answer_callback_query(c.id, "تم تغيير حالة الصيانة")
+        admin_menu(c.message) # تحديث اللوحة
+    elif c.data == "m_bc":
+        msg = bot.send_message(c.message.chat.id, "✍️ أرسل رسالة الإذاعة (ستظهر فوراً في التطبيق):")
+        bot.register_next_step_handler(msg, set_bc)
 
-    elif c.data == "a_bc":
-        msg = bot.send_message(c.message.chat.id, "✍️ أرسل الرسالة التي تريد نشرها للجميع:")
-        bot.register_next_step_handler(msg, broadcast_step)
+def set_bc(m):
+    db = get_db()
+    db["config"]["broadcast"] = m.text
+    save_db(db)
+    bot.send_message(m.chat.id, "✅ تم النشر بنجاح.")
 
-    elif c.data == "a_gift":
-        msg = bot.send_message(c.message.chat.id, "🆔 أرسل الـ Android ID للإهداء:")
-        bot.register_next_step_handler(msg, gift_step)
-
-    bot.answer_callback_query(c.id)
-
-def broadcast_step(m):
-    db = load_db()
-    for uid in db["users"]:
-        try: bot.send_message(uid, f"📢 رسالة من الإدارة:\n\n{m.text}")
-        except: pass
-    bot.send_message(m.chat.id, "✅ تمت الإذاعة بنجاح.")
-
-def gift_step(m):
-    post_status(m.text.strip(), 30)
-    bot.send_message(m.chat.id, "🎁 تم إرسال تفعيل الشهر للجهاز المذكور.")
-
-@bot.pre_checkout_query_handler(func=lambda q: True)
-def checkout(q): bot.answer_pre_checkout_query(q.id, ok=True)
-
-@bot.message_handler(content_types=['successful_payment'])
-def pay_done(m):
-    db = load_db()
-    u = db["users"].get(str(m.from_user.id))
-    post_status(u["aid"], 30)
-    bot.send_message(m.chat.id, "🌟 تم الدفع بنجاح! تم إرسال تفعيل شهر لجهازك.")
-
+# --- تشغيل النظام ---
+def run_flask(): app.run(host='0.0.0.0', port=8080)
 if __name__ == "__main__":
-    keep_alive()
+    Thread(target=run_flask).start()
     bot.infinity_polling()
