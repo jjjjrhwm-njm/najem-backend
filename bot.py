@@ -44,7 +44,7 @@ def check():
             "end_time": time.time() + 86400,  # يوم مجاني مرة واحدة
             "points": 0,
             "banned": False,
-            "trial_used": True
+            "trial_used": False
         }
         save_data(db)
 
@@ -67,8 +67,8 @@ def check():
 # --- رسائل المستخدم ---
 def user_intro_message(aid):
     return ("👋 أهلاً بك!\n"
-            "للحصول على اشتراك مجاني أو فتح الميزات، أرسل كلمة: كود\n"
-            "لتجميع النقاط، ادعُ صديقك وستحصل على 3 أيام اشتراك")
+            "للحصول على ميزات الاشتراك أرسل كلمة: كود\n"
+            "📌 لتجميع نقاط، ادعُ صديقين وستحصل على 3 أيام اشتراك إضافية")
 
 # --- التعامل مع /start ---
 @bot.message_handler(commands=['start'])
@@ -76,7 +76,7 @@ def start(m):
     if m.from_user.id == ADMIN_ID:
         admin_panel(m)
     else:
-        bot.send_message(m.chat.id, user_intro_message(m.from_user.id))
+        bot.send_message(m.chat.id, user_intro_message(str(m.from_user.id)))
 
 # --- لوحة المدير ---
 def admin_panel(m):
@@ -87,41 +87,58 @@ def admin_panel(m):
     markup.add("🎁 إهداء اشتراك")
     bot.send_message(m.chat.id, "👑 أهلاً بك يا مدير.\nالمنظومة متصلة والتطبيق تحت سيطرتك الآن.", reply_markup=markup)
 
-# --- التعامل مع الأزرار ---
+# --- التعامل مع الأوامر النصية ---
 @bot.message_handler(func=lambda m: True)
 def handle_text(m):
     text = m.text.strip().lower()
-    if text == "كود":
-        offer_user_features(m)
-    elif m.from_user.id == ADMIN_ID:
+    aid = str(m.from_user.id)
+    db = get_data()
+    db['users'].setdefault(aid, {"subscription_type":"free","start_time":time.time(),"end_time":time.time()+86400,"points":0,"banned":False,"trial_used":False})
+    
+    if m.from_user.id == ADMIN_ID:
         handle_admin_buttons(m)
     else:
-        bot.send_message(m.chat.id, "📌 أرسل كلمة: كود للحصول على الميزات.")
+        if text == "كود":
+            offer_user_features(m)
+        else:
+            bot.send_message(m.chat.id, "📌 أرسل كلمة: كود للحصول على الميزات.")
 
 # --- ميزات المستخدم عند إرسال كود ---
 def offer_user_features(m):
     aid = str(m.from_user.id)
     db = get_data()
-    user = db['users'].setdefault(aid, {"subscription_type":"free", "start_time":time.time(),
-                                        "end_time":time.time()+86400, "points":0, "banned":False, "trial_used":False})
+    user = db['users'][aid]
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("💎 شراء اشتراك 100 نجمة", "🎯 تجميع نقاط", "🎁 الاشتراك التجريبي")
     bot.send_message(m.chat.id, f"✨ ميزاتك:\nاشتراك: {user['subscription_type']}\nنقاط: {user['points']}", reply_markup=markup)
 
-# --- زر شراء اشتراك مدفوع ---
+# --- زر شراء الاشتراك المدفوع ---
 @bot.message_handler(func=lambda m: m.text == "💎 شراء اشتراك 100 نجمة")
 def buy_subscription(m):
-    # رابط دفع رسمي داخل التليجرام (Telegram Payments)
-    prices = [telebot.types.LabeledPrice(label='اشتراك شهر', amount=800)]  # 8 ريال = 800 هللة
+    prices = [telebot.types.LabeledPrice(label='اشتراك شهر', amount=800)]
     bot.send_invoice(m.chat.id, title="اشتراك شهري", description="اشتراك شهر كامل داخل التطبيق", provider_token="YOUR_PROVIDER_TOKEN", currency="SAR", prices=prices, start_parameter="monthly-subscription", payload="monthly")
+
+@bot.pre_checkout_query_handler(func=lambda query: True)
+def checkout(pre_checkout_query):
+    bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
+
+@bot.message_handler(content_types=['successful_payment'])
+def got_payment(m):
+    aid = str(m.from_user.id)
+    db = get_data()
+    user = db['users'][aid]
+    user["subscription_type"] = "paid"
+    user["start_time"] = time.time()
+    user["end_time"] = time.time() + 30*86400
+    save_data(db)
+    bot.send_message(m.chat.id, "✅ تم تفعيل اشتراكك الشهري بنجاح!")
 
 # --- الاشتراك التجريبي (مرة واحدة لكل جهاز) ---
 @bot.message_handler(func=lambda m: m.text == "🎁 الاشتراك التجريبي")
 def trial_subscription(m):
     aid = str(m.from_user.id)
     db = get_data()
-    user = db['users'].setdefault(aid, {"subscription_type":"free", "start_time":time.time(),
-                                        "end_time":time.time()+86400, "points":0, "banned":False, "trial_used":False})
+    user = db['users'][aid]
     if user.get("trial_used", False):
         bot.send_message(m.chat.id, "❌ لقد استخدمت الاشتراك التجريبي مسبقاً.")
     else:
@@ -137,25 +154,8 @@ def trial_subscription(m):
 def points_info(m):
     aid = str(m.from_user.id)
     db = get_data()
-    user = db['users'].setdefault(aid, {"points":0})
-    bot.send_message(m.chat.id, f"📌 نقاطك الحالية: {user['points']}\nادعُ صديقك للحصول على نقاط إضافية.")
-
-# --- دفع الاشتراك الفعلي ---
-@bot.pre_checkout_query_handler(func=lambda query: True)
-def checkout(pre_checkout_query):
-    bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
-
-@bot.message_handler(content_types=['successful_payment'])
-def got_payment(m):
-    aid = str(m.from_user.id)
-    db = get_data()
-    user = db['users'].setdefault(aid, {"subscription_type":"free", "start_time":time.time(),
-                                        "end_time":time.time(), "points":0, "banned":False, "trial_used":False})
-    user["subscription_type"] = "paid"
-    user["start_time"] = time.time()
-    user["end_time"] = time.time() + 30*86400
-    save_data(db)
-    bot.send_message(m.chat.id, "✅ تم تفعيل اشتراكك الشهري بنجاح!")
+    user = db['users'][aid]
+    bot.send_message(m.chat.id, f"📌 نقاطك الحالية: {user['points']}\nادعُ صديقين للحصول على 3 أيام اشتراك إضافية.")
 
 # --- التعامل مع أزرار المدير ---
 def handle_admin_buttons(m):
@@ -190,8 +190,8 @@ def save_announcement(m):
 def ban_user(m):
     db = get_data()
     aid = m.text.strip()
-    db["users"].setdefault(aid, {"banned": True})
-    db["users"][aid]["banned"] = True
+    db['users'].setdefault(aid, {"banned": True})
+    db['users'][aid]["banned"] = True
     save_data(db)
     bot.send_message(m.chat.id, "🚫 تم حظر الجهاز.")
 
