@@ -4,226 +4,213 @@ from flask import Flask, request
 import json, os, time
 from threading import Thread
 
-# --- [ إعدادات النظام - نجم الإبداع ] ---
+# --- [ الإعدادات الأساسية ] ---
 API_TOKEN = '8322095833:AAEq5gd2R3HiN9agRdX-R995vHXeWx2oT7g'
 ADMIN_ID = 7650083401
-DATA_FILE = "master_control.json"
+DATA_FILE = "master_data.json"
 
-# إعدادات الأسعار والاشتراك
-PRICE_100_STARS = 100 
-SUBSCRIPTION_DAYS = 30 # المدة الممنوحة عند الشراء
+# إعدادات الأسعار
+STAR_PRICE_MONTH = 100 # ما يعادل تقريباً 8-10 ريال عبر النجوم
+TRIAL_DAYS = 1
+REFERRAL_REWARD_DAYS = 3
+REQUIRED_REFERRALS = 3
 
 bot = telebot.TeleBot(API_TOKEN)
 app = Flask(__name__)
 
-# --- [ إدارة قاعدة البيانات ] ---
-def get_data():
+# --- [ إدارة البيانات ] ---
+def load_db():
     if not os.path.exists(DATA_FILE):
-        return {
-            "users": {},
-            "config": {
-                "maintenance": False,
-                "announcement": "مرحباً بكم في تطبيق نجم الإبداع",
-                "latest_version": "1.0",
-                "update_url": ""
-            }
-        }
-    with open(DATA_FILE, "r", encoding='utf-8') as f:
+        return {"users": {}, "config": {"maintenance": False, "announcement": "مرحباً", "ver": "1.0", "url": ""}}
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def save_data(data):
-    with open(DATA_FILE, "w", encoding='utf-8') as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+def save_db(db):
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(db, f, indent=4, ensure_ascii=False)
 
-# --- [ API الخاص بالتطبيق الأندرويد ] ---
+# --- [ منطق API التطبيق ] ---
 @app.route('/check')
-def check():
-    aid = request.args.get('aid', 'unknown')
-    db = get_data()
-
-    if aid not in db['users']:
-        db['users'][aid] = {
-            "subscription_type": "free",
-            "start_time": time.time(),
-            "end_time": time.time() + 86400, # يوم مجاني تلقائي
-            "points": 0,
-            "banned": False
-        }
-        save_data(db)
-
-    user = db['users'][aid]
-
-    if user['banned']:
-        return "STATUS:BANNED"
-
-    maintenance = db['config']['maintenance']
-    announcement = db['config']['announcement']
-    latest_version = db['config']['latest_version']
-    update_url = db['config']['update_url']
-
-    # التحقق من انتهاء الاشتراك
+def check_status():
+    aid = request.args.get('aid')
+    db = load_db()
+    if not aid or aid not in db["users"]:
+        return "ERROR:NOT_FOUND"
+    
+    user = db["users"][aid]
+    if user.get("banned"): return "STATUS:BANNED"
+    
+    # تحديث نوع الاشتراك إذا انتهى الوقت
     now = time.time()
-    if now > user['end_time']:
-        user['subscription_type'] = "free"
-        save_data(db)
+    sub_status = user["subscription_type"]
+    if now > user["end_time"]:
+        sub_status = "free"
+    
+    cfg = db["config"]
+    return f"MT:{int(cfg['maintenance'])}|BC:{cfg['announcement']}|VER:{cfg['ver']}|URL:{cfg['url']}|SUB:{sub_status}"
 
-    return f"MT:{int(maintenance)}|BC:{announcement}|VER:{latest_version}|URL:{update_url}|SUB:{user['subscription_type']}|POINTS:{user['points']}"
-
-# --- [ لوحات التحكم (المدير والمستخدم) ] ---
+# --- [ واجهة المستخدم - أمر: كود ] ---
 
 @bot.message_handler(commands=['start'])
-def welcome(m):
-    if m.from_user.id == ADMIN_ID:
-        show_admin_panel(m)
-    else:
-        bot.send_message(m.chat.id, "👋 مرحباً بك في بوت الإدارة.\nأرسل كلمة ( **كود** ) لإدارة اشتراكك.")
-
-@bot.message_handler(func=lambda m: m.text.lower() == "كود")
-def user_panel(m):
-    db = get_data()
-    aid = str(m.from_user.id)
-    user = db["users"].setdefault(aid, {
-        "subscription_type": "free",
-        "start_time": time.time(),
-        "end_time": time.time() + 86400,
-        "points": 0,
-        "banned": False
-    })
-
-    # حساب الأيام المتبقية
-    remaining_days = int((user['end_time'] - time.time()) / 86400)
-    remaining_days = max(0, remaining_days)
-
-    msg = (f"👤 **ملف المستخدم**\n"
-           f"🆔 معرفك: `{aid}`\n"
-           f"💎 نوع الاشتراك: {user['subscription_type']}\n"
-           f"⏳ المتبقي: {remaining_days} يوم\n"
-           f"⭐ نقاطك: {user['points']}")
-
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add("💎 شراء اشتراك 100 نجمة", "🎁 اشتراك تجريبي يوم")
-    bot.send_message(m.chat.id, msg, reply_markup=markup, parse_mode="Markdown")
-
-def show_admin_panel(m):
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add("📊 إحصائيات المتصلين", "🛠 وضع الصيانة")
-    markup.add("📢 نشر إذاعة", "🚫 حظر جهاز", "✅ فك حظر")
-    markup.add("🎁 إهداء اشتراك")
-    bot.send_message(m.chat.id, "👑 أهلاً بك يا مدير **نجم الإبداع**.\nالتحكم الكامل بين يديك الآن.", reply_markup=markup)
-
-# --- [ نظام الدفع بنجوم تليجرام ] ---
-
-@bot.message_handler(func=lambda m: m.text == "💎 شراء اشتراك 100 نجمة")
-def send_stars_invoice(m):
-    title = "تفعيل اشتراك برو"
-    description = f"تفعيل ميزات التطبيق الكاملة لمدة {SUBSCRIPTION_DAYS} يوم."
-    payload = f"stars_pay_{m.from_user.id}"
-    currency = "XTR" 
-    prices = [types.LabeledPrice(label="اشتراك برو", amount=PRICE_100_STARS)]
-
-    bot.send_invoice(m.chat.id, title, description, payload, "", currency, prices)
-
-@bot.pre_checkout_query_handler(func=lambda query: True)
-def checkout(pre_checkout_query):
-    bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
-
-@bot.message_handler(content_types=['successful_payment'])
-def got_payment(m):
-    db = get_data()
+def start(m):
+    db = load_db()
     aid = str(m.from_user.id)
     
-    if aid in db["users"]:
-        user = db["users"][aid]
-        now = time.time()
-        # إذا كان اشتراكه لسه شغال، نزود فوقه، لو منتهي نبدأ من الآن
-        current_end = user["end_time"] if user["end_time"] > now else now
-        
-        user["subscription_type"] = "premium"
-        user["end_time"] = current_end + (SUBSCRIPTION_DAYS * 86400)
-        save_data(db)
-        
-        bot.send_message(m.chat.id, "✅ **تم تفعيل الاشتراك بنجاح!**\nشكرًا لثقتك بـ نجم الإبداع. استمتع بالتطبيق.")
-        bot.send_message(ADMIN_ID, f"💰 **عملية دفع جديدة!**\nالمستخدم: {aid}\nالمبلغ: 100 نجمة")
+    # منطق دعوة الأصدقاء (Referral)
+    args = m.text.split()
+    if len(args) > 1 and args[1] != aid:
+        referrer_id = args[1]
+        if aid not in db["users"]: # إذا كان المستخدم جديداً فعلاً
+            db["users"].setdefault(referrer_id, {"ref_count": 0})
+            db["users"][referrer_id]["ref_count"] = db["users"][referrer_id].get("ref_count", 0) + 1
+            # إذا وصل لـ 3 دعوات
+            if db["users"][referrer_id]["ref_count"] >= REQUIRED_REFERRALS:
+                db["users"][referrer_id]["end_time"] = max(db["users"][referrer_id].get("end_time", time.time()), time.time()) + (REFERRAL_REWARD_DAYS * 86400)
+                db["users"][referrer_id]["ref_count"] = 0 # تصفير العداد بعد المكافأة
+                bot.send_message(referrer_id, f"🎁 تهانينا! دعوت 3 أصدقاء وحصلت على {REFERRAL_REWARD_DAYS} أيام مجانية.")
 
-# --- [ أوامر الإدارة ] ---
+    # إنشاء حساب إذا لم يوجد
+    if aid not in db["users"]:
+        db["users"][aid] = {
+            "subscription_type": "free",
+            "end_time": time.time(),
+            "trial_used": False,
+            "ref_count": 0,
+            "banned": False
+        }
+    save_db(db)
+    bot.send_message(m.chat.id, "مرحباً بك! أرسل كلمة ( **كود** ) لفتح لوحة التحكم.", parse_mode="Markdown")
 
-@bot.message_handler(func=lambda m: m.text == "📊 إحصائيات المتصلين")
-def stats(m):
-    db = get_data()
-    total = len(db["users"])
-    active = len([u for u in db["users"].values() if u["subscription_type"] == "premium"])
-    bot.send_message(m.chat.id, f"👥 إجمالي المستخدمين: {total}\n💎 المشتركين برو: {active}")
+@bot.message_handler(func=lambda m: m.text == "كود")
+def user_menu(m):
+    db = load_db()
+    user = db["users"].get(str(m.from_user.id), {})
+    rem = int((user.get("end_time", 0) - time.time()) / 86400)
+    rem = max(0, rem)
+    
+    status_text = f"👤 **معلوماتك:**\nاشتراكك: `{user.get('subscription_type')}`\nالمتبقي: `{rem}` يوم\nدعواتك: `{user.get('ref_count', 0)}/3`"
+    
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add("🎁 تجربة يوم مجاني", "💎 شراء شهر (100 نجمة)")
+    markup.add("🔗 رابط الدعوة الخاص بي")
+    bot.send_message(m.chat.id, status_text, reply_markup=markup, parse_mode="Markdown")
 
-@bot.message_handler(func=lambda m: m.text == "🛠 وضع الصيانة")
-def toggle_mt(m):
-    db = get_data()
-    db["config"]["maintenance"] = not db["config"]["maintenance"]
-    save_data(db)
-    status = "🔴 تم فتح التطبيق للجميع" if not db["config"]["maintenance"] else "🟢 تم تفعيل وضع الصيانة (إغلاق)"
-    bot.send_message(m.chat.id, status)
+@bot.message_handler(func=lambda m: m.text == "🎁 تجربة يوم مجاني")
+def claim_trial(m):
+    db = load_db()
+    user = db["users"].get(str(m.from_user.id))
+    if user.get("trial_used"):
+        bot.send_message(m.chat.id, "❌ لقد استخدمت الفترة التجريبية مسبقاً.")
+    else:
+        user["trial_used"] = True
+        user["end_time"] = time.time() + 86400
+        user["subscription_type"] = "trial"
+        save_db(db)
+        bot.send_message(m.chat.id, "✅ تم تفعيل اشتراكك لمدة 24 ساعة.")
 
-@bot.message_handler(func=lambda m: m.text == "📢 نشر إذاعة")
-def bc_ask(m):
-    msg = bot.send_message(m.chat.id, "✍️ أرسل نص الإعلان الجديد للتطبيق:")
-    bot.register_next_step_handler(msg, bc_save)
+@bot.message_handler(func=lambda m: m.text == "🔗 رابط الدعوة الخاص بي")
+def send_ref_link(m):
+    bot.send_message(m.chat.id, f"انشر هذا الرابط، وإذا اشترك 3 من طرفك ستحصل على 3 أيام مجانية:\nhttps://t.me/{(bot.get_me()).username}?start={m.from_user.id}")
 
-def bc_save(m):
-    db = get_data()
-    db["config"]["announcement"] = m.text
-    save_data(db)
-    bot.send_message(m.chat.id, "✅ تم تحديث الإعلان في التطبيق.")
+# --- [ واجهة المدير - أمر: نجم1 ] ---
 
-@bot.message_handler(func=lambda m: m.text == "🚫 حظر جهاز")
-def ban_ask(m):
-    msg = bot.send_message(m.chat.id, "🆔 أرسل الـ ID المراد حظره:")
-    bot.register_next_step_handler(msg, ban_save)
+@bot.message_handler(func=lambda m: m.text == "نجم1" and m.from_user.id == ADMIN_ID)
+def admin_menu(m):
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add("🛠 وضع الصيانة", "📢 إعلان جديد")
+    markup.add("🎁 إهداء اشتراك", "🚫 حظر/فك حظر")
+    markup.add("🆕 تحديث التطبيق")
+    bot.send_message(m.chat.id, "👑 أهلاً يا مدير. اختر المهمة:", reply_markup=markup)
 
-def ban_save(m):
-    db = get_data()
-    target = m.text.strip()
-    db["users"].setdefault(target, {"banned": True})
-    db["users"][target]["banned"] = True
-    save_data(db)
-    bot.send_message(m.chat.id, "🚫 تم الحظر بنجاح.")
+# 1. إهداء اشتراك
+@bot.message_handler(func=lambda m: m.text == "🎁 إهداء اشتراك" and m.from_user.id == ADMIN_ID)
+def gift_start(m):
+    msg = bot.send_message(m.chat.id, "أرسل ID المستخدم ثم الأيام (مثال: `123456 30`):")
+    bot.register_next_step_handler(msg, gift_process)
 
-@bot.message_handler(func=lambda m: m.text == "✅ فك حظر")
-def unban_ask(m):
-    msg = bot.send_message(m.chat.id, "🆔 أرسل الـ ID لفك حظره:")
-    bot.register_next_step_handler(msg, unban_save)
-
-def unban_save(m):
-    db = get_data()
-    target = m.text.strip()
-    if target in db["users"]:
-        db["users"][target]["banned"] = False
-        save_data(db)
-        bot.send_message(m.chat.id, "✅ تم فك الحظر.")
-
-@bot.message_handler(func=lambda m: m.text == "🎁 إهداء اشتراك")
-def gift_ask(m):
-    msg = bot.send_message(m.chat.id, "🆔 أرسل الـ ID ثم مسافة ثم عدد الأيام:\n(مثال: `7650083401 7`)")
-    bot.register_next_step_handler(msg, gift_save)
-
-def gift_save(m):
+def gift_process(m):
     try:
         aid, days = m.text.split()
-        db = get_data()
-        now = time.time()
-        user = db["users"].setdefault(aid, {"end_time": now, "points": 0, "banned": False})
-        current_end = user["end_time"] if user["end_time"] > now else now
-        user["subscription_type"] = "gifted"
-        user["end_time"] = current_end + (int(days) * 86400)
-        save_data(db)
-        bot.send_message(m.chat.id, f"🎁 تم إهداء {days} يوم للمستخدم {aid}")
-    except:
-        bot.send_message(m.chat.id, "❌ خطأ في الصيغة! تأكد من كتابة ID ثم مسافة ثم الرقم.")
+        db = load_db()
+        if aid in db["users"]:
+            db["users"][aid]["end_time"] = max(db["users"][aid]["end_time"], time.time()) + (int(days) * 86400)
+            db["users"][aid]["subscription_type"] = "premium"
+            save_db(db)
+            bot.send_message(m.chat.id, f"✅ تم إهداء {days} يوم لـ {aid}")
+        else: bot.send_message(m.chat.id, "❌ المستخدم غير موجود.")
+    except: bot.send_message(m.chat.id, "❌ خطأ في الصيغة.")
 
-# --- [ تشغيل السيرفر ] ---
-def run_flask():
-    app.run(host='0.0.0.0', port=8080)
+# 2. حظر وفك حظر
+@bot.message_handler(func=lambda m: m.text == "🚫 حظر/فك حظر" and m.from_user.id == ADMIN_ID)
+def ban_start(m):
+    msg = bot.send_message(m.chat.id, "أرسل ID المستخدم للحظر أو فك الحظر:")
+    bot.register_next_step_handler(msg, ban_process)
+
+def ban_process(m):
+    db = load_db()
+    aid = m.text.strip()
+    if aid in db["users"]:
+        db["users"][aid]["banned"] = not db["users"][aid].get("banned", False)
+        save_db(db)
+        status = "محظور" if db["users"][aid]["banned"] else "نشط"
+        bot.send_message(m.chat.id, f"✅ تم تغيير حالة المستخدم {aid} إلى: {status}")
+    else: bot.send_message(m.chat.id, "❌ غير موجود.")
+
+# 3. تحديث التطبيق
+@bot.message_handler(func=lambda m: m.text == "🆕 تحديث التطبيق" and m.from_user.id == ADMIN_ID)
+def update_start(m):
+    msg = bot.send_message(m.chat.id, "أرسل رقم الإصدار الجديد ثم الرابط (مثال: `2.0 https://site.com/app.apk`):")
+    bot.register_next_step_handler(msg, update_process)
+
+def update_process(m):
+    try:
+        ver, url = m.text.split()
+        db = load_db()
+        db["config"]["ver"] = ver
+        db["config"]["url"] = url
+        save_db(db)
+        bot.send_message(m.chat.id, "✅ تم تحديث بيانات الإصدار الجديد.")
+    except: bot.send_message(m.chat.id, "❌ خطأ في الصيغة.")
+
+# 4. الصيانة والإعلان
+@bot.message_handler(func=lambda m: m.text == "🛠 وضع الصيانة" and m.from_user.id == ADMIN_ID)
+def toggle_mt(m):
+    db = load_db()
+    db["config"]["maintenance"] = not db["config"]["maintenance"]
+    save_db(db)
+    bot.send_message(m.chat.id, f"وضع الصيانة الآن: {'مفعل 🟢' if db['config']['maintenance'] else 'معطل 🔴'}")
+
+@bot.message_handler(func=lambda m: m.text == "📢 إعلان جديد" and m.from_user.id == ADMIN_ID)
+def announce_start(m):
+    msg = bot.send_message(m.chat.id, "أرسل نص الإعلان الذي سيظهر داخل التطبيق:")
+    bot.register_next_step_handler(msg, announce_process)
+
+def announce_process(m):
+    db = load_db()
+    db["config"]["announcement"] = m.text
+    save_db(db)
+    bot.send_message(m.chat.id, "✅ تم تحديث الإعلان.")
+
+# --- [ نظام الدفع بالنجوم ] ---
+@bot.message_handler(func=lambda m: m.text == "💎 شراء شهر (100 نجمة)")
+def pay_month(m):
+    bot.send_invoice(m.chat.id, "اشتراك شهر برو", "تفعيل كافة ميزات التطبيق", f"pay_{m.from_user.id}", "", "XTR", [types.LabeledPrice("برو", 100)])
+
+@bot.pre_checkout_query_handler(func=lambda q: True)
+def checkout(q): bot.answer_pre_checkout_query(q.id, ok=True)
+
+@bot.message_handler(content_types=['successful_payment'])
+def pay_success(m):
+    db = load_db()
+    aid = str(m.from_user.id)
+    db["users"][aid]["end_time"] = max(db["users"][aid]["end_time"], time.time()) + (30 * 86400)
+    db["users"][aid]["subscription_type"] = "premium"
+    save_db(db)
+    bot.send_message(m.chat.id, "✅ تم تفعيل اشتراكك الشهري بنجاح!")
+
+# --- [ التشغيل ] ---
+def run_api(): app.run(host='0.0.0.0', port=8080)
 
 if __name__ == "__main__":
-    # تشغيل API في خلفية منفصلة
-    Thread(target=run_flask).start()
-    print("🚀 MASTER CORE IS ONLINE - STAR OF CREATIVITY")
+    Thread(target=run_api).start()
     bot.infinity_polling()
