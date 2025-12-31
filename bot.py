@@ -4,167 +4,115 @@ import json, os, time
 from flask import Flask
 from threading import Thread
 
-# --- إعدادات السيرفر ---
+# --- تشغيل السيرفر ---
 app = Flask('')
 @app.route('/')
-def home(): return "NJM Bot is Online!"
+def home(): return "NJM System Online"
 def run(): app.run(host='0.0.0.0', port=8080)
-def keep_alive():
-    Thread(target=run).start()
+def keep_alive(): Thread(target=run).start()
 
-# --- البيانات الأساسية ---
+# --- إعدادات البوت ---
 API_TOKEN = '8322095833:AAEq5gd2R3HiN9agRdX-R995vHXeWx2oT7g'
-CHANNEL_ID = "@nejm_njm" 
+CHANNEL_ID = "@nejm_njm" # تأكد أنها قناة عامة Public
 ADMIN_ID = 7650083401 
-DATA_FILE = "njm_database.json"
 
 bot = telebot.TeleBot(API_TOKEN)
 
-def load_data():
-    if not os.path.exists(DATA_FILE): return {"users": {}, "trials": [], "banned": []}
-    with open(DATA_FILE, "r", encoding='utf-8') as f: return json.load(f)
+def load_db():
+    if not os.path.exists("njm_pro.json"): return {"users": {}, "trials": [], "banned": []}
+    with open("njm_pro.json", "r") as f: return json.load(f)
 
-def save_data(data):
-    with open(DATA_FILE, "w", encoding='utf-8') as f: json.dump(data, f, indent=4, ensure_ascii=False)
+def save_db(db):
+    with open("njm_pro.json", "w") as f: json.dump(db, f, indent=4)
 
-def get_user(data, uid):
-    uid = str(uid)
-    if uid not in data["users"]:
-        data["users"][uid] = {"points": 0, "aid": "غير معروف", "invited_by": None, "sub_end": 0}
-    return data["users"][uid]
+# --- دالة الإرسال للقناة (معدلة لتجنب مشاكل HTML) ---
+def post_status(aid, days):
+    # نرسل النص بدون Markdown في الأسطر الحساسة لضمان قراءتها من Smali
+    txt = "💎 NJM SYSTEM\n"
+    txt += f"Device:{aid}\n"
+    txt += f"Plan:{days}\n"
+    txt += "Status:ACTIVE"
+    bot.send_message(CHANNEL_ID, txt)
 
-def sync_to_channel(aid, days):
-    # الصيغة التي سيفهمها الـ Smali (Device:ID Plan:Days)
-    msg = f"✨ تفعيل ذكي جديد\n━━━━━━━━━━━━━\nDevice:{aid}\nPlan:{days}\n━━━━━━━━━━━━━\nبواسطة: نجم الإبداع"
-    bot.send_message(CHANNEL_ID, msg)
-
-# --- الأوامر الرئيسية ---
-
+# --- الأوامر ---
 @bot.message_handler(commands=['start'])
-def start_cmd(message):
-    data = load_data()
-    uid = str(message.from_user.id)
-    if uid in data["banned"]: return
+def start(m):
+    db = load_db()
+    uid = str(m.from_user.id)
+    if uid in db["banned"]: return
+    if uid not in db["users"]: db["users"][uid] = {"pts": 0, "aid": "NONE"}
     
-    user = get_user(data, uid)
-    if "ref_" in message.text and not user["invited_by"]:
-        inviter_id = message.text.split("ref_")[1]
-        if inviter_id != uid:
-            inviter = get_user(data, inviter_id)
-            inviter["points"] += 100
-            user["invited_by"] = inviter_id
-            bot.send_message(inviter_id, "🔥 مبروك! حصلت على 100 نقطة من دعوة صديق.")
-
-    if "code_" in message.text:
-        user["aid"] = message.text.split("code_")[1]
-        bot.reply_to(message, f"🎯 تم ربط جهازك: `{user['aid']}`", parse_mode="Markdown")
+    if "code_" in m.text:
+        db["users"][uid]["aid"] = m.text.split("code_")[1]
+        bot.reply_to(m, "✅ تم ربط جهازك بنظام نجم الإبداع.")
     
-    save_data(data)
-    bot.send_message(message.chat.id, f"🚀 أهلاً بك في عالم نجم الإبداع.\n\nأرسل كلمة (كود) للتحكم.")
+    save_db(db)
+    bot.send_message(m.chat.id, f"👋 أهلاً بك {m.from_user.first_name}\nأرسل كلمة (كود) لفتح اللوحة.")
 
 @bot.message_handler(func=lambda m: m.text == "كود")
-def user_menu(message):
-    data = load_data()
-    uid = str(message.from_user.id)
-    user = get_user(data, uid)
+def menu(m):
+    db = load_db()
+    uid = str(m.from_user.id)
+    u = db["users"].get(uid)
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🎁 تجربة (1 يوم)", callback_data="p_1"))
+    markup.add(types.InlineKeyboardButton("⭐ شراء شهر (100 نجمة)", callback_data="p_30"))
+    bot.send_message(m.chat.id, f"👤 حسابك:\n🆔 جهازك: `{u['aid']}`\n💰 نقاطك: `{u['pts']}`", reply_markup=markup, parse_mode="Markdown")
+
+# --- لوحة المدير ---
+@bot.message_handler(func=lambda m: m.text == "njm5" and m.from_user.id == ADMIN_ID)
+def admin(m):
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("📢 إذاعة (نشر للكل)", callback_data="a_bc"))
+    markup.add(types.InlineKeyboardButton("🎁 إهداء تفعيل", callback_data="a_gift"))
+    bot.send_message(m.chat.id, "👑 لوحة الإدارة العليا - نجم الإبداع", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda c: True)
+def calls(c):
+    db = load_db()
+    uid = str(c.from_user.id)
+    u = db["users"].get(uid)
     
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("🎁 تجربة (يوم)", callback_data="trial_1"),
-        types.InlineKeyboardButton("⭐ شراء شهر (100 نجمة)", callback_data="buy_30"),
-        types.InlineKeyboardButton("🔄 استبدال النقاط (1000=شهر)", callback_data="points_30"),
-        types.InlineKeyboardButton("👤 حسابي", callback_data="my_info")
-    )
+    if c.data == "p_1":
+        if u["aid"] == "NONE": return bot.answer_callback_query(c.id, "❌ اربط جهازك أولاً")
+        post_status(u["aid"], 1)
+        bot.send_message(c.message.chat.id, "✅ تم إرسال طلب التفعيل لليوم! اضغط (تحقق) في التطبيق.")
     
-    bot_link = f"https://t.me/{bot.get_me().username}?start=ref_{uid}"
-    msg = f"🛡 **لوحة تحكم المستخدم**\n\n💰 نقاطك: `{user['points']}`\n🆔 جهازك: `{user['aid']}`\n🔗 رابطك: `{bot_link}`"
-    bot.send_message(message.chat.id, msg, reply_markup=markup, parse_mode="Markdown")
+    elif c.data == "p_30":
+        if u["aid"] == "NONE": return bot.answer_callback_query(c.id, "❌ اربط جهازك أولاً")
+        prices = [types.LabeledPrice(label="تفعيل 30 يوم", amount=100)]
+        bot.send_invoice(c.message.chat.id, "اشتراك شهر", "تفعيل تطبيق نجم الإبداع", "sub_30", "", "XTR", prices)
 
-# --- لوحة المدير njm5 ---
-@bot.message_handler(func=lambda m: m.text == "njm5")
-def admin_panel(message):
-    if int(message.from_user.id) != ADMIN_ID: return
-    data = load_data()
-    
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("📢 إذاعة للجميع", callback_data="admin_bc"),
-        types.InlineKeyboardButton("🎁 إهداء تفعيل", callback_data="admin_gift"),
-        types.InlineKeyboardButton("🚫 حظر", callback_data="admin_ban"),
-        types.InlineKeyboardButton("📊 الإحصائيات", callback_data="admin_stats")
-    )
-    bot.send_message(message.chat.id, "👑 **مرحباً بك يا مدير (نجم الإبداع)**", reply_markup=markup)
+    elif c.data == "a_bc":
+        msg = bot.send_message(c.message.chat.id, "✍️ أرسل الرسالة التي تريد نشرها للجميع:")
+        bot.register_next_step_handler(msg, broadcast_step)
 
-# --- معالجة الضغطات ---
-@bot.callback_query_handler(func=lambda call: True)
-def handle_query(call):
-    data = load_data()
-    uid = str(call.from_user.id)
-    user = get_user(data, uid)
-
-    if call.data == "trial_1":
-        if uid in data["trials"]:
-            bot.answer_callback_query(call.id, "❌ استخدمت التجربة سابقاً", show_alert=True)
-        elif user["aid"] == "غير معروف":
-            bot.answer_callback_query(call.id, "❌ اربط جهازك أولاً", show_alert=True)
-        else:
-            data["trials"].append(uid)
-            sync_to_channel(user["aid"], 1)
-            bot.send_message(call.message.chat.id, "✅ تم تفعيل يوم واحد مجاناً!")
-            save_data(data)
-
-    elif call.data == "buy_30":
-        if user["aid"] == "غير معروف":
-            bot.answer_callback_query(call.id, "❌ اربط جهازك أولاً")
-        else:
-            prices = [types.LabeledPrice(label="تفعيل شهر", amount=100)] # 100 نجمة
-            bot.send_invoice(call.message.chat.id, "تفعيل 30 يوم", f"للجهاز: {user['aid']}", "sub_30", "", "XTR", prices)
-
-    elif call.data == "points_30":
-        if user["points"] >= 1000:
-            user["points"] -= 1000
-            sync_to_channel(user["aid"], 30)
-            bot.send_message(call.message.chat.id, "🎉 مبروك! تم استبدال النقاط بتفعيل شهر.")
-            save_data(data)
-        else:
-            bot.answer_callback_query(call.id, "❌ تحتاج 1000 نقطة على الأقل", show_alert=True)
-
-    elif call.data == "admin_bc":
-        msg = bot.send_message(call.message.chat.id, "✍️ أرسل رسالة الإذاعة الآن:")
-        bot.register_next_step_handler(msg, bc_step)
-
-    elif call.data == "admin_gift":
-        msg = bot.send_message(call.message.chat.id, "🆔 أرسل الـ Android ID للإهداء:")
+    elif c.data == "a_gift":
+        msg = bot.send_message(c.message.chat.id, "🆔 أرسل الـ Android ID للإهداء:")
         bot.register_next_step_handler(msg, gift_step)
 
-    bot.answer_callback_query(call.id)
+    bot.answer_callback_query(c.id)
 
-# --- خطوات المدير ---
-def bc_step(message):
-    data = load_data()
-    count = 0
-    for user_id in data["users"]:
-        try:
-            bot.send_message(user_id, f"📢 **رسالة من الإدارة:**\n\n{message.text}")
-            count += 1
+def broadcast_step(m):
+    db = load_db()
+    for uid in db["users"]:
+        try: bot.send_message(uid, f"📢 رسالة من الإدارة:\n\n{m.text}")
         except: pass
-    bot.send_message(message.chat.id, f"✅ تم الإرسال لـ {count} مستخدم.")
+    bot.send_message(m.chat.id, "✅ تمت الإذاعة بنجاح.")
 
-def gift_step(message):
-    aid = message.text.strip()
-    sync_to_channel(aid, 30)
-    bot.send_message(message.chat.id, f"🎁 تم إهداء تفعيل شهر للجهاز:\n`{aid}`", parse_mode="Markdown")
+def gift_step(m):
+    post_status(m.text.strip(), 30)
+    bot.send_message(m.chat.id, "🎁 تم إرسال تفعيل الشهر للجهاز المذكور.")
 
-# --- الدفع ---
-@bot.pre_checkout_query_handler(func=lambda query: True)
-def pre_checkout(query): bot.answer_pre_checkout_query(query.id, ok=True)
+@bot.pre_checkout_query_handler(func=lambda q: True)
+def checkout(q): bot.answer_pre_checkout_query(q.id, ok=True)
 
 @bot.message_handler(content_types=['successful_payment'])
-def pay_ok(message):
-    data = load_data()
-    user = get_user(data, message.from_user.id)
-    sync_to_channel(user["aid"], 30)
-    bot.send_message(message.chat.id, "🌟 شكراً لك! تم تفعيل الشهر بنجاح.")
+def pay_done(m):
+    db = load_db()
+    u = db["users"].get(str(m.from_user.id))
+    post_status(u["aid"], 30)
+    bot.send_message(m.chat.id, "🌟 تم الدفع بنجاح! تم إرسال تفعيل شهر لجهازك.")
 
 if __name__ == "__main__":
     keep_alive()
