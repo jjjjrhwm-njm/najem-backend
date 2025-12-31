@@ -1,105 +1,126 @@
-import telebot
-from telebot import types
-import json, os, time
-from flask import Flask, request
+import telebot, json, time, os
+from flask import Flask, request, jsonify
 from threading import Thread
 
-# --- المنظومة مبرمجة ببياناتك الخاصة (جاهزة 100%) ---
-API_TOKEN = '8322095833:AAEq5gd2R3HiN9agRdX-R995vHXeWx2oT7g'
+# ====== الإعدادات ======
+BOT_TOKEN = "PUT_YOUR_TOKEN"
 ADMIN_ID = 7650083401
-CHANNEL_ID = "@nejm_njm"
-DATA_FILE = "master_control.json"
+DATA_FILE = "db.json"
 
-bot = telebot.TeleBot(API_TOKEN)
+bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
-# --- إدارة قاعدة البيانات اللحظية ---
-def get_data():
+# ====== قاعدة البيانات ======
+def load():
     if not os.path.exists(DATA_FILE):
         return {
-            "banned": [], 
-            "config": {"mt": "0", "bc": "لا يوجد إعلانات حالياً", "ver": "1.0", "url": "https://t.me/nejm_njm"},
-            "active": {}
+            "users": {},
+            "banned": [],
+            "maintenance": False,
+            "broadcast": "",
+            "version": "1.0",
+            "update_url": ""
         }
-    try:
-        with open(DATA_FILE, "r") as f: return json.load(f)
-    except:
-        return {"banned": [], "config": {"mt": "0", "bc": "لا يوجد إعلانات", "ver": "1.0", "url": "https://t.me/nejm_njm"}, "active": {}}
+    return json.load(open(DATA_FILE))
 
-def save_data(data):
-    with open(DATA_FILE, "w") as f: json.dump(data, f, indent=4)
+def save(db):
+    json.dump(db, open(DATA_FILE,"w"), indent=2)
 
-# --- بروتوكول الربط مع التطبيق (API) ---
-@app.route('/check')
-def check():
-    aid = request.args.get('aid', 'unknown')
-    db = get_data()
-    
-    # تسجيل دخول المستخدم (الرادار)
-    db["active"][aid] = time.time()
-    save_data(db)
-    
-    # التحقق من الحظر
-    if aid in db["banned"]: return "STATUS:BANNED"
-    
-    # إرسال بيانات التحكم (صيانة|إذاعة|نسخة|رابط)
-    res = f"MT:{db['config']['mt']}|BC:{db['config']['bc']}|VER:{db['config']['ver']}|URL:{db['config']['url']}"
-    return res
+# ====== API للتطبيق ======
+@app.route("/sync")
+def sync():
+    uid = request.args.get("uid")
+    db = load()
 
-# --- لوحة التحكم العليا (Telegram) ---
-@bot.message_handler(commands=['start'])
-def welcome(m):
-    if m.from_user.id != ADMIN_ID:
-        return bot.reply_to(m, "❌ أنت لست المدير المخول.")
-    
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add("📊 إحصائيات المتصلين", "🛠 وضع الصيانة")
-    markup.add("📢 نشر إذاعة", "🆙 تحديث التطبيق")
-    markup.add("🚫 حظر جهاز", "✅ فك حظر")
-    bot.send_message(m.chat.id, "👑 أهلاً بك يا مدير **نجم الإبداع**.\nالمنظومة متصلة والتطبيق تحت سيطرتك الآن.", reply_markup=markup, parse_mode="Markdown")
+    if uid in db["banned"]:
+        return jsonify({"status":"banned"})
 
-@bot.message_handler(func=lambda m: m.text == "📊 إحصائيات المتصلين")
-def stats(m):
-    db = get_data()
-    # جرد المستخدمين النشطين في آخر دقيقة
-    online_count = len([t for t in db["active"].values() if time.time() - t < 60])
-    bot.send_message(m.chat.id, f"👥 **المستخدمين المتواجدين الآن:** `{online_count}`", parse_mode="Markdown")
+    if uid not in db["users"]:
+        db["users"][uid] = {
+            "sub_until": time.time() + 86400,
+            "points": 0
+        }
+        save(db)
 
-@bot.message_handler(func=lambda m: m.text == "🛠 وضع الصيانة")
-def toggle_mt(m):
-    db = get_data()
-    db["config"]["mt"] = "1" if db["config"]["mt"] == "0" else "0"
-    save_data(db)
-    status = "🟢 تفعيل الصيانة (التطبيق مغلق)" if db["config"]["mt"] == "1" else "🔴 إيقاف الصيانة (التطبيق مفتوح)"
-    bot.send_message(m.chat.id, f"⚙️ {status}")
+    user = db["users"][uid]
 
-@bot.message_handler(func=lambda m: m.text == "📢 نشر إذاعة")
-def bc_ask(m):
-    msg = bot.send_message(m.chat.id, "✍️ أرسل الإعلان الذي سيظهر للمستخدمين فوراً:")
-    bot.register_next_step_handler(msg, bc_save)
+    return jsonify({
+        "status":"ok",
+        "maintenance": db["maintenance"],
+        "broadcast": db["broadcast"],
+        "version": db["version"],
+        "update_url": db["update_url"],
+        "sub_until": user["sub_until"],
+        "points": user["points"]
+    })
 
-def bc_save(m):
-    db = get_data()
-    db["config"]["bc"] = m.text
-    save_data(db)
-    bot.send_message(m.chat.id, "✅ تم تحديث الإذاعة بنجاح.")
+# ====== أوامر البوت ======
+@bot.message_handler(commands=["start"])
+def start(m):
+    if m.from_user.id != ADMIN_ID: return
+    kb = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("📢 بث", "🛠 صيانة")
+    kb.add("🚫 حظر", "🎁 هدية اشتراك")
+    kb.add("🆙 تحديث")
+    bot.send_message(m.chat.id,"👑 لوحة التحكم",reply_markup=kb)
 
-@bot.message_handler(func=lambda m: m.text == "🚫 حظر جهاز")
-def ban_ask(m):
-    msg = bot.send_message(m.chat.id, "🆔 أرسل الـ Android ID للجهاز المطلوب طرده:")
-    bot.register_next_step_handler(msg, ban_save)
+@bot.message_handler(func=lambda m:m.text=="📢 بث")
+def bc(m):
+    msg = bot.send_message(m.chat.id,"اكتب الرسالة")
+    bot.register_next_step_handler(msg,save_bc)
 
-def ban_save(m):
-    db = get_data()
-    db["banned"].append(m.text.strip())
-    save_data(db)
-    bot.send_message(m.chat.id, "🚫 تم حظر الجهاز. لن يتمكن من فتح التطبيق ثانية.")
+def save_bc(m):
+    db=load()
+    db["broadcast"]=m.text
+    save(db)
+    bot.send_message(m.chat.id,"✅ تم")
 
-# --- تشغيل المحرك ---
-def run_flask():
-    app.run(host='0.0.0.0', port=8080)
+@bot.message_handler(func=lambda m:m.text=="🛠 صيانة")
+def mt(m):
+    db=load()
+    db["maintenance"]=not db["maintenance"]
+    save(db)
+    bot.send_message(m.chat.id,"🔁 تم التغيير")
 
-if __name__ == "__main__":
-    Thread(target=run_flask).start()
-    print("NJM MASTER CORE IS RUNNING...")
-    bot.infinity_polling()
+@bot.message_handler(func=lambda m:m.text=="🚫 حظر")
+def ban(m):
+    msg=bot.send_message(m.chat.id,"أرسل UID")
+    bot.register_next_step_handler(msg,do_ban)
+
+def do_ban(m):
+    db=load()
+    db["banned"].append(m.text)
+    save(db)
+    bot.send_message(m.chat.id,"🚫 محظور")
+
+@bot.message_handler(func=lambda m:m.text=="🎁 هدية اشتراك")
+def gift(m):
+    msg=bot.send_message(m.chat.id,"UID + أيام\nمثال:\nABC123 7")
+    bot.register_next_step_handler(msg,do_gift)
+
+def do_gift(m):
+    uid,days=m.text.split()
+    db=load()
+    db["users"][uid]["sub_until"]=time.time()+int(days)*86400
+    save(db)
+    bot.send_message(m.chat.id,"🎉 تم")
+
+@bot.message_handler(func=lambda m:m.text=="🆙 تحديث")
+def upd(m):
+    msg=bot.send_message(m.chat.id,"version | url")
+    bot.register_next_step_handler(msg,do_upd)
+
+def do_upd(m):
+    v,u=m.text.split("|")
+    db=load()
+    db["version"]=v.strip()
+    db["update_url"]=u.strip()
+    save(db)
+    bot.send_message(m.chat.id,"⬆️ جاهز")
+
+# ====== تشغيل ======
+def run_api():
+    app.run("0.0.0.0",8080)
+
+Thread(target=run_api).start()
+bot.infinity_polling()
