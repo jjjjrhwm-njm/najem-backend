@@ -228,3 +228,124 @@ if __name__ == "__main__":
     keep_alive()
     print("البوت يعمل الآن...")
     bot.infinity_polling()
+            f"🌍 الحالة: {'متصل' if not is_banned(uid, data) else 'محظور'}"
+        )
+        bot.send_message(message.chat.id, info, parse_mode="Markdown")
+
+    elif message.text == "🎁 كود مجاني":
+        if uid in data["trials"]:
+            bot.reply_to(message, "❌ لقد حصلت على كود تجريبي من قبل!")
+        else:
+            bot.reply_to(message, "ارسل الان الـ Android ID الخاص بجهازك للحصول على 24 ساعة:")
+            bot.register_next_step_handler(message, process_free_trial)
+
+    elif message.text == "🛠 لوحة التحكم" and message.from_user.id == ADMIN_ID:
+        admin_panel(message)
+
+# --- وظائف المدير ---
+def admin_panel(message):
+    data = load_data()
+    total_users = len(data["users"])
+    total_banned = len(data["banned"])
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("🚫 حظر مستخدم", callback_data="a_ban"),
+        types.InlineKeyboardButton("✅ فك حظر", callback_data="a_unban"),
+        types.InlineKeyboardButton("🎁 إهداء تفعيل", callback_data="a_gift"),
+        types.InlineKeyboardButton("📢 إذاعة", callback_data="a_bc")
+    )
+    msg = f"🛠 **لوحة تحكم المدير**\n\n👥 مستخدمين: {total_users}\n🚫 محظورين: {total_banned}"
+    bot.send_message(message.chat.id, msg, reply_markup=markup, parse_mode="Markdown")
+
+# --- معالجة الأزرار المضمنة (Callback) ---
+@bot.callback_query_handler(func=lambda call: True)
+def callback_query(call):
+    data = load_data()
+    uid = str(call.from_user.id)
+
+    if call.data == "buy_stars":
+        # إرسال فاتورة دفع بنجوم تليجرام (XTR)
+        # السعر: 50 نجمة مقابل تفعيل دائم (مثال)
+        bot.send_invoice(
+            call.message.chat.id,
+            title="تفعيل دائم",
+            description="شراء اشتراك دائم في التطبيق باستخدام النجوم",
+            provider_token="", # يترك فارغاً للنجوم
+            currency="XTR",
+            prices=[types.LabeledPrice("تفعيل", 50)],
+            invoice_payload="pay_forever"
+        )
+
+    elif call.data == "swap_pts":
+        user = data["users"].get(uid)
+        if user["points"] >= 500 and user["aid"] != "غير مربوط":
+            user["points"] -= 500
+            post_to_channel(user["aid"], "دائم (نقاط)")
+            bot.send_message(call.message.chat.id, "✅ تم التفعيل بنجاح!")
+            save_data(data)
+        else:
+            bot.answer_callback_query(call.id, "❌ نقاطك غير كافية أو لم تربط جهازك!", show_alert=True)
+
+    elif call.data == "a_ban":
+        msg = bot.send_message(call.message.chat.id, "أرسل ID المستخدم لحظره:")
+        bot.register_next_step_handler(msg, lambda m: process_ban(m, True))
+
+    elif call.data == "a_unban":
+        msg = bot.send_message(call.message.chat.id, "أرسل ID المستخدم لفك الحظر:")
+        bot.register_next_step_handler(msg, lambda m: process_ban(m, False))
+
+    elif call.data == "a_gift":
+        msg = bot.send_message(call.message.chat.id, "أرسل الـ Android ID لإهدائه تفعيل:")
+        bot.register_next_step_handler(msg, process_gift)
+
+    bot.answer_callback_query(call.id)
+
+# --- وظائف الخطوات التالية (Next Step Handlers) ---
+def process_free_trial(message):
+    data = load_data()
+    aid = message.text.strip()
+    uid = str(message.from_user.id)
+    if post_to_channel(aid, "24 ساعة"):
+        data["trials"].append(uid)
+        data["users"][uid]["aid"] = aid
+        save_data(data)
+        bot.reply_to(message, "✅ تم تفعيل جهازك لمدة 24 ساعة تجريبية!")
+
+def process_ban(message, ban=True):
+    data = load_data()
+    target_id = message.text.strip()
+    if ban:
+        if target_id not in data["banned"]: data["banned"].append(target_id)
+        bot.reply_to(message, f"🚫 تم حظر {target_id}")
+    else:
+        if target_id in data["banned"]: data["banned"].remove(target_id)
+        bot.reply_to(message, f"✅ تم فك حظر {target_id}")
+    save_data(data)
+
+def process_gift(message):
+    aid = message.text.strip()
+    if post_to_channel(aid, "إهداء دائم"):
+        bot.reply_to(message, "✅ تم إرسال التفعيل بنجاح!")
+
+# --- معالجة الدفع بالنجوم ---
+@bot.pre_checkout_query_handler(func=lambda query: True)
+def checkout(pre_checkout_query):
+    bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
+
+@bot.successful_payment_handler(func=lambda payment: True)
+def got_payment(message):
+    data = load_data()
+    uid = str(message.from_user.id)
+    user = data["users"].get(uid)
+    if user["aid"] != "غير مربوط":
+        post_to_channel(user["aid"], "دائم (نجوم)")
+        bot.send_message(message.chat.id, "🎉 شكراً لك! تم التفعيل الدائم بنجاح.")
+    else:
+        bot.send_message(message.chat.id, "⚠️ تم الدفع ولكن جهازك غير مربوط! تواصل مع المدير.")
+
+# --- التشغيل ---
+if __name__ == "__main__":
+    keep_alive()
+    print("البوت يعمل الآن...")
+    bot.infinity_polling()
