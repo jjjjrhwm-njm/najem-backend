@@ -6,15 +6,15 @@ from flask import Flask, request, jsonify
 from telebot import TeleBot, types
 from threading import Thread
 
-# --- إعداداتك الخاصة ---
+# --- الإعدادات المحفوظة لنجم الإبداع ---
 API_TOKEN = '8322095833:AAEq5gd2R3HiN9agRdX-R995vHXeWx2oT7g'
-ADMIN_ID = 12345678  # ضع هنا آيدي حسابك الحقيقي
+BOT_USERNAME = 'Njm_jrhwm_bot'
+ADMIN_ID = 12345678  # استبدله بآيدي حسابك الحقيقي
 DB_FILE = 'database.json'
 
 bot = TeleBot(API_TOKEN)
 app = Flask(__name__)
 
-# --- وظائف قاعدة البيانات ---
 def load_db():
     if not os.path.exists(DB_FILE):
         return {"users": {}, "app_links": {}, "vouchers": {}}
@@ -29,17 +29,14 @@ def save_db(db):
 @app.route('/check')
 def check():
     aid = request.args.get('aid')
-    pkg = request.args.get('pkg') # استلام اسم الحزمة لضمان الفصل
+    pkg = request.args.get('pkg')
+    if not aid or not pkg: return "EXPIRED"
     
-    if not aid or not pkg:
-        return "EXPIRED"
-        
     db = load_db()
-    # إنشاء مفتاح فريد لكل تطبيق على كل جهاز
-    app_key = f"{aid}_{pkg}"
+    key = f"{aid}_{pkg}" # مفتاح فريد لكل تطبيق على الجهاز
     
-    if app_key in db["app_links"]:
-        if db["app_links"][app_key].get("end_time", 0) > time.time():
+    if key in db["app_links"]:
+        if db["app_links"][key].get("end_time", 0) > time.time():
             return "ACTIVE"
     return "EXPIRED"
 
@@ -50,13 +47,13 @@ def start(m):
     db = load_db()
     args = m.text.split()
     if len(args) > 1:
-        # استلام البيانات بصيغة ID_PKG
-        data = args[1].split('_')
-        if len(data) == 2:
-            aid, pkg = data[0], data[1]
-            db["users"][str(m.from_user.id)] = {"aid": aid, "pkg": pkg}
+        # استلام البيانات بصيغة AID_PKG من الرابط
+        try:
+            aid, pkg = args[1].split('_', 1)
+            db["users"][str(m.from_user.id)] = {"app_id": aid, "pkg": pkg}
             save_db(db)
-            bot.send_message(m.chat.id, f"✅ تم الربط!\n📱 التطبيق: {pkg}\n🆔 الجهاز: {aid}")
+            bot.send_message(m.chat.id, f"✅ تم ربط جهازك!\n📱 التطبيق: `{pkg}`\n🆔 المعرف: `{aid}`", parse_mode="Markdown")
+        except: pass
 
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("🎁 تجربة مجانية (3س)", "📊 حالتي")
@@ -64,18 +61,18 @@ def start(m):
     bot.send_message(m.chat.id, "مرحباً بك في بوت نجم الإبداع 🌟", reply_markup=markup)
 
 @bot.message_handler(func=lambda m: m.text == "💎 شراء اشتراك")
-def buy_pro(m):
+def buy_stars(m):
     db = load_db()
     user = db["users"].get(str(m.from_user.id))
-    if not user: return bot.send_message(m.chat.id, "❌ ادخل من التطبيق أولاً للربط.")
+    if not user: return bot.send_message(m.chat.id, "❌ ادخل من التطبيق أولاً.")
     
-    aid, pkg = user["aid"], user["pkg"]
+    aid, pkg = user["app_id"], user["pkg"]
     
     bot.send_invoice(
         m.chat.id,
         title="اشتراك شهر كامل - برو",
         description=f"تفعيل ميزات تطبيق {pkg} لمدة 30 يوم.",
-        invoice_payload=f"pay_{aid}_{pkg}", # Payload يحتوي على الجهاز والحزمة
+        invoice_payload=f"pay_{aid}_{pkg}", # الحمولة تجمع بين الجهاز والحزمة
         provider_token="",
         currency="XTR",
         prices=[types.LabeledPrice(label="اشتراك برو", amount=100)]
@@ -89,14 +86,14 @@ def checkout(q):
 def pay_success(m):
     db = load_db()
     payload = m.successful_payment.invoice_payload.replace("pay_", "")
-    # Payload الآن هو aid_pkg
+    # payload هنا هو aid_pkg
     
     current_end = max(time.time(), db["app_links"].get(payload, {}).get("end_time", 0))
     if payload not in db["app_links"]: db["app_links"][payload] = {}
     
     db["app_links"][payload]["end_time"] = current_end + (30 * 86400)
     save_db(db)
-    bot.send_message(m.chat.id, f"✅ تم الدفع بنجاح لتطبيقك!")
+    bot.send_message(m.chat.id, "✅ تم الدفع بنجاح! تم تفعيل الاشتراك.")
 
 @bot.message_handler(func=lambda m: m.text == "🎁 تجربة مجانية (3س)")
 def trial(m):
@@ -104,16 +101,16 @@ def trial(m):
     user = db["users"].get(str(m.from_user.id))
     if not user: return bot.send_message(m.chat.id, "❌ ادخل من التطبيق أولاً.")
     
-    app_key = f"{user['aid']}_{user['pkg']}"
+    app_key = f"{user['app_id']}_{user['pkg']}"
     if app_key not in db["app_links"]: db["app_links"][app_key] = {}
 
     if db["app_links"][app_key].get("trial_used"):
-        bot.send_message(m.chat.id, "❌ استخدمت الفترة التجريبية لهذا التطبيق سابقاً.")
+        bot.send_message(m.chat.id, "❌ استخدمت الفترة التجريبية سابقاً لهذا التطبيق.")
     else:
         db["app_links"][app_key]["trial_used"] = True
         db["app_links"][app_key]["end_time"] = time.time() + 10800 # 3 ساعات
         save_db(db)
-        bot.send_message(m.chat.id, "✅ تم تفعيل 3 ساعات! عد للتطبيق واضغط دخول.")
+        bot.send_message(m.chat.id, "✅ تم تفعيل 3 ساعات! عد للتطبيق واضغط **دخول**.")
 
 @bot.message_handler(func=lambda m: m.text == "نجم1" and m.from_user.id == ADMIN_ID)
 def admin(m):
@@ -141,12 +138,12 @@ def redeem_final(m):
         days = db["vouchers"].pop(code)
         user = db["users"].get(str(m.from_user.id))
         if user:
-            app_key = f"{user['aid']}_{user['pkg']}"
+            app_key = f"{user['app_id']}_{user['pkg']}"
             if app_key not in db["app_links"]: db["app_links"][app_key] = {}
             db["app_links"][app_key]["end_time"] = max(time.time(), db["app_links"][app_key].get("end_time", 0)) + (days * 86400)
             save_db(db)
             bot.send_message(m.chat.id, f"✅ تم التفعيل لمدة {days} يوم!")
-        else: bot.send_message(m.chat.id, "❌ اربط جهازك أولاً.")
+        else: bot.send_message(m.chat.id, "❌ ادخل من التطبيق أولاً.")
     else: bot.send_message(m.chat.id, "❌ كود غير صحيح.")
 
 def run():
