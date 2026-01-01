@@ -35,7 +35,7 @@ def check_status():
     if user_data.get("banned"): return "BANNED"
     if time.time() > user_data.get("end_time", 0): return "EXPIRED"
     
-    return "ACTIVE" # هذا النص هو المفتاح لفتح التطبيق
+    return "ACTIVE"
 
 # --- [ واجهة البوت - Telegram ] ---
 @bot.message_handler(commands=['start'])
@@ -46,7 +46,6 @@ def start(m):
     
     if uid not in db["users"]: db["users"][uid] = {"app_id": None}
     
-    # الربط التلقائي عند الدخول من التطبيق عبر الرابط العميق
     if len(args) > 1:
         aid = args[1]
         db["app_links"][aid] = db["app_links"].get(aid, {"end_time": 0, "banned": False, "trial_used": False, "telegram_id": uid})
@@ -60,12 +59,53 @@ def start(m):
     menu.add("📊 حالتي", "🛒 شراء اشتراك")
     bot.send_message(m.chat.id, "أهلاً بك في بوت **نجم الإبداع**. اختر من القائمة أدناه:", reply_markup=menu, parse_mode="Markdown")
 
+# --- [ جديد: نظام الشراء بنجوم تلجرام ] ---
+
+@bot.message_handler(func=lambda m: m.text == "🛒 شراء اشتراك")
+def send_payment_invoice(m):
+    db = load_db()
+    uid = str(m.from_user.id)
+    aid = db["users"].get(uid, {}).get("app_id")
+    
+    if not aid:
+        return bot.send_message(m.chat.id, "❌ يجب الدخول من التطبيق أولاً لربط جهازك قبل الشراء.")
+    
+    # إرسال فاتورة بـ 100 نجمة
+    bot.send_invoice(
+        m.chat.id, 
+        title="اشتراك شهر كامل - برو", 
+        description="تفعيل كافة ميزات التطبيق لمدة 30 يوم.",
+        invoice_payload=f"pay_{aid}", # حمولة تحتوي على معرف الجهاز لضمان التفعيل له
+        provider_token="", # يترك فارغاً للنجوم
+        currency="XTR", # عملة نجوم تلجرام
+        prices=[types.LabeledPrice(label="اشتراك برو", amount=100)]
+    )
+
+@bot.pre_checkout_query_handler(func=lambda q: True)
+def checkout(q):
+    # الموافقة على الدفع
+    bot.answer_pre_checkout_query(q.id, ok=True)
+
+@bot.message_handler(content_types=['successful_payment'])
+def pay_success(m):
+    db = load_db()
+    payload = m.successful_payment.invoice_payload
+    aid = payload.replace("pay_", "") # استخراج معرف الجهاز من الحمولة
+    
+    # إضافة 30 يوم للاشتراك
+    current_end = max(time.time(), db["app_links"].get(aid, {}).get("end_time", 0))
+    db["app_links"][aid]["end_time"] = current_end + (30 * 86400)
+    save_db(db)
+    
+    bot.send_message(m.chat.id, f"✅ **تم الدفع بنجاح!**\nتم تفعيل اشتراكك لمدة 30 يوم للمعرف: `{aid}`", parse_mode="Markdown")
+
+# --- [ بقية الوظائف الحالية ] ---
+
 @bot.message_handler(func=lambda m: m.text == "📊 حالتي")
 def status(m):
     db = load_db()
     aid = db["users"].get(str(m.from_user.id), {}).get("app_id")
     if not aid: return bot.send_message(m.chat.id, "❌ لم يتم ربط جهازك. ادخل من التطبيق.")
-    
     info = db["app_links"].get(aid, {})
     rem = max(0, int((info.get("end_time", 0) - time.time()) / 3600))
     bot.send_message(m.chat.id, f"👤 معرفك: `{aid}`\n⏳ المتبقي: {rem} ساعة.", parse_mode="Markdown")
@@ -75,7 +115,6 @@ def trial(m):
     db = load_db()
     aid = db["users"].get(str(m.from_user.id), {}).get("app_id")
     if not aid: return bot.send_message(m.chat.id, "❌ ادخل من التطبيق أولاً للربط.")
-    
     if db["app_links"][aid].get("trial_used"):
         bot.send_message(m.chat.id, "❌ استخدمت الفترة التجريبية سابقاً.")
     else:
