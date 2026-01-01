@@ -15,11 +15,10 @@ db_lock = Lock()
 
 def load_db():
     with db_lock:
-        if not os.path.exists(DATA_FILE): 
-            return {"users": {}, "app_subscriptions": {}, "vouchers": {}}
+        if not os.path.exists(DATA_FILE): return {"users": {}, "app_links": {}, "vouchers": {}}
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f: return json.load(f)
-        except: return {"users": {}, "app_subscriptions": {}} 
+        except: return {"users": {}, "app_links": {}, "vouchers": {}} 
 
 def save_db(db):
     with db_lock:
@@ -28,15 +27,14 @@ def save_db(db):
 # --- [ واجهة فحص التطبيق - API ] ---
 @app.route('/check')
 def check_status():
-    aid = request.args.get('aid') # معرف الجهاز
-    pkg = request.args.get('pkg') # اسم التطبيق (باقة)
-    
+    aid = request.args.get('aid')
+    pkg = request.args.get('pkg') # استلام اسم الحزمة
     if not aid or not pkg: return "EXPIRED"
     
     db = load_db()
-    # الوصول للاشتراك بناءً على التطبيق + معرف الجهاز
-    app_key = f"{pkg}_{aid}"
-    user_data = db.get("app_subscriptions", {}).get(app_key)
+    # المعرف الفريد هو دمج الأيدي مع اسم الحزمة
+    unique_id = f"{aid}_{pkg}"
+    user_data = db["app_links"].get(unique_id)
     
     if not user_data: return "EXPIRED"
     if user_data.get("banned"): return "BANNED"
@@ -51,107 +49,85 @@ def start(m):
     uid = str(m.from_user.id)
     args = m.text.split()
     
-    if uid not in db["users"]: db["users"][uid] = {"current_app_key": None}
+    if uid not in db["users"]: db["users"][uid] = {"current_app": None}
     
-    # معالجة الرابط القادم من التطبيق: start=DEVICEID_PKGNAME
     if len(args) > 1:
-        payload = args[1] # ستحتوي على ID_PKG
-        if "_" in payload:
-            aid, pkg = payload.split("_", 1)
-            app_key = f"{pkg}_{aid}"
-            
-            # تسجيل الدخول أو ربط التطبيق الحالي
-            if app_key not in db.get("app_subscriptions", {}):
-                if "app_subscriptions" not in db: db["app_subscriptions"] = {}
-                db["app_subscriptions"][app_key] = {"end_time": 0, "trial_used": False, "pkg": pkg, "aid": aid}
-            
-            db["users"][uid]["current_app_key"] = app_key
-            save_db(db)
-            bot.send_message(m.chat.id, f"✅ **تم التعرف على التطبيق!**\n📦 التطبيق: `{pkg}`\n📱 الجهاز: `{aid}`", parse_mode="Markdown")
+        # args[1] سيكون بتنسيق AID_PKG
+        combined_id = args[1]
+        db["app_links"][combined_id] = db["app_links"].get(combined_id, {"end_time": 0, "banned": False, "trial_used": False, "telegram_id": uid})
+        db["app_links"][combined_id]["telegram_id"] = uid
+        db["users"][uid]["current_app"] = combined_id
+        save_db(db)
+        
+        # استخراج اسم الحزمة للعرض فقط
+        pkg_display = combined_id.split('_')[-1] if '_' in combined_id else "Unknown"
+        bot.send_message(m.chat.id, f"✅ **تم ربط جهازك بنجاح!**\nالتطبيق: `{pkg_display}`", parse_mode="Markdown") 
 
     menu = types.ReplyKeyboardMarkup(resize_keyboard=True)
     menu.add("🎁 تجربة مجانية (24س)", "🎫 تفعيل كود")
     menu.add("📊 حالتي", "🛒 شراء اشتراك")
-    bot.send_message(m.chat.id, "أهلاً بك يا **نجم الإبداع**. اختر من القائمة:", reply_markup=menu, parse_mode="Markdown") 
+    bot.send_message(m.chat.id, "أهلاً بك في بوت **نجم الإبداع**. اختر من القائمة أدناه:", reply_markup=menu, parse_mode="Markdown") 
 
-# --- [ شراء اشتراك ] --- 
 @bot.message_handler(func=lambda m: m.text == "🛒 شراء اشتراك")
-def buy_subscription(m):
+def send_payment_invoice(m):
     db = load_db()
     uid = str(m.from_user.id)
-    app_key = db["users"].get(uid, {}).get("current_app_key")
+    combined_id = db["users"].get(uid, {}).get("current_app")
     
-    if not app_key:
-        return bot.send_message(m.chat.id, "❌ يرجى الدخول من التطبيق المراد تفعيله أولاً.")
+    if not combined_id:
+        return bot.send_message(m.chat.id, "❌ يجب الدخول من التطبيق المراد اشتراكه أولاً.")
     
+    pkg_name = combined_id.split('_')[-1]
     bot.send_invoice(
         m.chat.id, 
-        title="تفعيل تطبيق برو", 
-        description=f"تفعيل لمدة 30 يوم للتطبيق المرتبط حالياً.",
-        invoice_payload=f"pay_{app_key}",
+        title=f"اشتراك: {pkg_name}", 
+        description="تفعيل ميزات هذا التطبيق لمدة 30 يوم.",
+        invoice_payload=f"pay_{combined_id}",
         provider_token="", 
         currency="XTR", 
         prices=[types.LabeledPrice(label="اشتراك برو", amount=100)]
-    )
+    ) 
 
 @bot.pre_checkout_query_handler(func=lambda q: True)
-def checkout(q): bot.answer_pre_checkout_query(q.id, ok=True) 
+def checkout(q):
+    bot.answer_pre_checkout_query(q.id, ok=True) 
 
 @bot.message_handler(content_types=['successful_payment'])
 def pay_success(m):
     db = load_db()
-    app_key = m.successful_payment.invoice_payload.replace("pay_", "")
+    payload = m.successful_payment.invoice_payload
+    combined_id = payload.replace("pay_", "") 
     
-    current_end = max(time.time(), db["app_subscriptions"].get(app_key, {}).get("end_time", 0))
-    db["app_subscriptions"][app_key]["end_time"] = current_end + (30 * 86400)
+    current_end = max(time.time(), db["app_links"].get(combined_id, {}).get("end_time", 0))
+    db["app_links"][combined_id]["end_time"] = current_end + (30 * 86400)
     save_db(db)
-    bot.send_message(m.chat.id, "✅ تم التفعيل بنجاح لهذا التطبيق!")
+    
+    bot.send_message(m.chat.id, f"✅ **تم التفعيل بنجاح لهذا التطبيق!**") 
 
-# --- [ حالتي ] ---
 @bot.message_handler(func=lambda m: m.text == "📊 حالتي")
 def status(m):
     db = load_db()
-    uid = str(m.from_user.id)
-    app_key = db["users"].get(uid, {}).get("current_app_key")
+    combined_id = db["users"].get(str(m.from_user.id), {}).get("current_app")
+    if not combined_id: return bot.send_message(m.chat.id, "❌ لم يتم ربط أي تطبيق حالياً.")
     
-    if not app_key: return bot.send_message(m.chat.id, "❌ لم يتم ربط أي تطبيق حالياً.")
-    
-    info = db["app_subscriptions"].get(app_key, {})
-    pkg = info.get("pkg", "غير معروف")
+    info = db["app_links"].get(combined_id, {})
     rem = max(0, int((info.get("end_time", 0) - time.time()) / 3600))
-    bot.send_message(m.chat.id, f"📦 التطبيق: `{pkg}`\n⏳ المتبقي: {rem} ساعة.", parse_mode="Markdown")
+    pkg_name = combined_id.split('_')[-1]
+    bot.send_message(m.chat.id, f"📦 التطبيق: `{pkg_name}`\n⏳ المتبقي: {rem} ساعة.", parse_mode="Markdown") 
 
-# --- [ تجربة مجانية ] ---
 @bot.message_handler(func=lambda m: m.text == "🎁 تجربة مجانية (24س)")
 def trial(m):
     db = load_db()
-    app_key = db["users"].get(str(m.from_user.id), {}).get("current_app_key")
+    combined_id = db["users"].get(str(m.from_user.id), {}).get("current_app")
+    if not combined_id: return bot.send_message(m.chat.id, "❌ ادخل من التطبيق أولاً.")
     
-    if not app_key: return bot.send_message(m.chat.id, "❌ ادخل من التطبيق أولاً.")
-    
-    if db["app_subscriptions"][app_key].get("trial_used"):
-        bot.send_message(m.chat.id, "❌ استخدمت التجربة لهذا التطبيق سابقاً.")
+    if db["app_links"][combined_id].get("trial_used"):
+        bot.send_message(m.chat.id, "❌ استخدمت التجربة المجانية لهذا التطبيق مسبقاً.")
     else:
-        db["app_subscriptions"][app_key]["trial_used"] = True
-        db["app_subscriptions"][app_key]["end_time"] = time.time() + 86400
+        db["app_links"][combined_id]["trial_used"] = True
+        db["app_links"][combined_id]["end_time"] = time.time() + 86400
         save_db(db)
-        bot.send_message(m.chat.id, "✅ تم تفعيل 24 ساعة لهذا التطبيق!")
-
-# --- [ لوحة المدير والأكواد ] ---
-@bot.message_handler(func=lambda m: m.text == "نجم1" and m.from_user.id == ADMIN_ID)
-def admin(m):
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🎫 كود (30 يوم)", callback_data="gen_30"))
-    bot.send_message(m.chat.id, "👑 لوحة المدير:", reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda q: q.data == "gen_30")
-def generate(q):
-    code = f"NJM-{str(uuid.uuid4())[:8].upper()}"
-    db = load_db()
-    if "vouchers" not in db: db["vouchers"] = {}
-    db["vouchers"][code] = 30
-    save_db(db)
-    bot.edit_message_text(f"🎫 كود جديد:\n`{code}`", q.message.chat.id, q.message.message_id)
+        bot.send_message(m.chat.id, "✅ تم تفعيل 24 ساعة لهذا التطبيق!") 
 
 @bot.message_handler(func=lambda m: m.text == "🎫 تفعيل كود")
 def redeem_start(m):
@@ -161,17 +137,33 @@ def redeem_start(m):
 def redeem_final(m):
     code = m.text.strip()
     db = load_db()
-    if code in db.get("vouchers", {}):
+    if code in db["vouchers"]:
         days = db["vouchers"].pop(code)
-        app_key = db["users"].get(str(m.from_user.id), {}).get("current_app_key")
-        if app_key:
-            current = max(time.time(), db["app_subscriptions"][app_key].get("end_time", 0))
-            db["app_subscriptions"][app_key]["end_time"] = current + (days * 86400)
+        combined_id = db["users"].get(str(m.from_user.id), {}).get("current_app")
+        if combined_id:
+            db["app_links"][combined_id]["end_time"] = max(time.time(), db["app_links"][combined_id]["end_time"]) + (days * 86400)
             save_db(db)
             bot.send_message(m.chat.id, f"✅ تم تفعيل {days} يوم لهذا التطبيق!")
         else: bot.send_message(m.chat.id, "❌ اربط التطبيق أولاً.")
     else: bot.send_message(m.chat.id, "❌ كود غير صحيح.") 
 
+@bot.message_handler(func=lambda m: m.text == "نجم1" and m.from_user.id == ADMIN_ID)
+def admin(m):
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🎫 توليد كود (30 يوم)", callback_data="gen_30"))
+    bot.send_message(m.chat.id, "👑 لوحة المدير:", reply_markup=markup) 
+
+@bot.callback_query_handler(func=lambda q: q.data == "gen_30")
+def generate(q):
+    code = f"NJM-{str(uuid.uuid4())[:8].upper()}"
+    db = load_db()
+    db["vouchers"][code] = 30
+    save_db(db)
+    bot.edit_message_text(f"🎫 كود جديد:\n`{code}`", q.message.chat.id, q.message.message_id, parse_mode="Markdown") 
+
+def run():
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080))) 
+
 if __name__ == "__main__":
-    Thread(target=lambda: app.run(host='0.0.0.0', port=8080)).start()
+    Thread(target=run).start()
     bot.infinity_polling()
