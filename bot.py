@@ -4,7 +4,7 @@ from flask import Flask, request
 import json, os, time, uuid
 from threading import Thread, Lock
 
-# --- [ الإعدادات الأساسية ] ---
+# --- [ الإعدادات ] ---
 API_TOKEN = '8322095833:AAEq5gd2R3HiN9agRdX-R995vHXeWx2oT7g'
 ADMIN_ID = 7650083401
 DATA_FILE = "master_data.json"
@@ -24,140 +24,98 @@ def save_db(db):
     with db_lock:
         with open(DATA_FILE, "w", encoding="utf-8") as f: json.dump(db, f, indent=4)
 
-# --- [ واجهة فحص التطبيق - API ] ---
+# --- [ API فحص التطبيق - فحص مستقل لكل حزمة ] ---
 @app.route('/check')
 def check_status():
     aid = request.args.get('aid')
+    pkg = request.args.get('pkg') # استلام اسم الحزمة
     db = load_db()
-    user_data = db["app_links"].get(aid)
     
-    if not user_data: return "EXPIRED"
+    key = f"{aid}_{pkg}" # مفتاح الربط الفريد
+    user_data = db["app_links"].get(key)
+    
+    if not user_data or time.time() > user_data.get("end_time", 0): return "EXPIRED"
     if user_data.get("banned"): return "BANNED"
-    if time.time() > user_data.get("end_time", 0): return "EXPIRED"
-    
     return "ACTIVE"
 
-# --- [ واجهة البوت - Telegram ] ---
+# --- [ واجهة البوت ] ---
 @bot.message_handler(commands=['start'])
 def start(m):
     db = load_db()
     uid = str(m.from_user.id)
     args = m.text.split()
     
-    if uid not in db["users"]: db["users"][uid] = {"app_id": None}
+    if uid not in db["users"]: db["users"][uid] = {"last_key": None}
     
     if len(args) > 1:
-        aid = args[1]
-        db["app_links"][aid] = db["app_links"].get(aid, {"end_time": 0, "banned": False, "trial_used": False, "telegram_id": uid})
-        db["app_links"][aid]["telegram_id"] = uid
-        db["users"][uid]["app_id"] = aid
-        save_db(db)
-        bot.send_message(m.chat.id, f"✅ **تم ربط جهازك بنجاح!**\nمعرف الجهاز: `{aid}`", parse_mode="Markdown")
+        try:
+            # الرابط يأتي بصيغة: AID_PKG
+            aid_pkg = args[1]
+            aid, pkg = aid_pkg.split('_')
+            key = f"{aid}_{pkg}"
+            
+            db["app_links"][key] = db["app_links"].get(key, {"end_time": 0, "banned": False, "trial_used": False, "telegram_id": uid, "pkg": pkg})
+            db["app_links"][key]["telegram_id"] = uid
+            db["users"][uid]["last_key"] = key # حفظ آخر مفتاح تم التعامل معه
+            save_db(db)
+            bot.send_message(m.chat.id, f"✅ **تم ربط التطبيق بنجاح!**\n📦 التطبيق: `{pkg}`\n🆔 المعرف: `{aid}`", parse_mode="Markdown")
+        except: pass
 
     menu = types.ReplyKeyboardMarkup(resize_keyboard=True)
     menu.add("🎁 تجربة مجانية (24س)", "🎫 تفعيل كود")
-    menu.add("📊 حالتي", "🛒 شراء اشتراك")
-    bot.send_message(m.chat.id, "أهلاً بك في بوت **نجم الإبداع**. اختر من القائمة أدناه:", reply_markup=menu, parse_mode="Markdown")
+    menu.add("📊 حالتي", "🛒 شراء اشتراك (100⭐️)")
+    bot.send_message(m.chat.id, "أهلاً بك في بوت **نجم الإبداع**. اختر من القائمة:", reply_markup=menu, parse_mode="Markdown")
 
-# --- [ جديد: نظام الشراء بنجوم تلجرام ] ---
-
-@bot.message_handler(func=lambda m: m.text == "🛒 شراء اشتراك")
-def send_payment_invoice(m):
+# --- [ نظام الشراء بالنجوم - مستقل لكل تطبيق ] ---
+@bot.message_handler(func=lambda m: m.text == "🛒 شراء اشتراك (100⭐️)")
+def send_invoice(m):
     db = load_db()
-    uid = str(m.from_user.id)
-    aid = db["users"].get(uid, {}).get("app_id")
+    key = db["users"].get(str(m.from_user.id), {}).get("last_key")
+    if not key: return bot.send_message(m.chat.id, "❌ اربط التطبيق أولاً عبر الدخول منه.")
     
-    if not aid:
-        return bot.send_message(m.chat.id, "❌ يجب الدخول من التطبيق أولاً لربط جهازك قبل الشراء.")
-    
-    # إرسال فاتورة بـ 100 نجمة
+    pkg = key.split('_')[1]
     bot.send_invoice(
-        m.chat.id, 
-        title="اشتراك شهر كامل - برو", 
-        description="تفعيل كافة ميزات التطبيق لمدة 30 يوم.",
-        invoice_payload=f"pay_{aid}", # حمولة تحتوي على معرف الجهاز لضمان التفعيل له
-        provider_token="", # يترك فارغاً للنجوم
-        currency="XTR", # عملة نجوم تلجرام
-        prices=[types.LabeledPrice(label="اشتراك برو", amount=100)]
+        m.chat.id, title=f"اشتراك شهر - {pkg}", 
+        description=f"تفعيل تطبيق {pkg} لمدة 30 يوم.",
+        invoice_payload=f"pay_{key}", currency="XTR",
+        prices=[types.LabeledPrice(label="اشتراك برو", amount=100)], provider_token=""
     )
 
 @bot.pre_checkout_query_handler(func=lambda q: True)
-def checkout(q):
-    # الموافقة على الدفع
-    bot.answer_pre_checkout_query(q.id, ok=True)
+def checkout(q): bot.answer_pre_checkout_query(q.id, ok=True)
 
 @bot.message_handler(content_types=['successful_payment'])
 def pay_success(m):
     db = load_db()
-    payload = m.successful_payment.invoice_payload
-    aid = payload.replace("pay_", "") # استخراج معرف الجهاز من الحمولة
-    
-    # إضافة 30 يوم للاشتراك
-    current_end = max(time.time(), db["app_links"].get(aid, {}).get("end_time", 0))
-    db["app_links"][aid]["end_time"] = current_end + (30 * 86400)
+    key = m.successful_payment.invoice_payload.replace("pay_", "")
+    current_end = max(time.time(), db["app_links"][key].get("end_time", 0))
+    db["app_links"][key]["end_time"] = current_end + (30 * 86400)
     save_db(db)
-    
-    bot.send_message(m.chat.id, f"✅ **تم الدفع بنجاح!**\nتم تفعيل اشتراكك لمدة 30 يوم للمعرف: `{aid}`", parse_mode="Markdown")
-
-# --- [ بقية الوظائف الحالية ] ---
+    bot.send_message(m.chat.id, f"✅ تم التفعيل بنجاح للمفتاح: `{key}`")
 
 @bot.message_handler(func=lambda m: m.text == "📊 حالتي")
-def status(m):
+def my_status(m):
     db = load_db()
-    aid = db["users"].get(str(m.from_user.id), {}).get("app_id")
-    if not aid: return bot.send_message(m.chat.id, "❌ لم يتم ربط جهازك. ادخل من التطبيق.")
-    info = db["app_links"].get(aid, {})
-    rem = max(0, int((info.get("end_time", 0) - time.time()) / 3600))
-    bot.send_message(m.chat.id, f"👤 معرفك: `{aid}`\n⏳ المتبقي: {rem} ساعة.", parse_mode="Markdown")
+    key = db["users"].get(str(m.from_user.id), {}).get("last_key")
+    if not key: return bot.send_message(m.chat.id, "❌ لا يوجد تطبيق مربوط حالياً.")
+    status = db["app_links"].get(key, {})
+    rem = max(0, int((status.get("end_time", 0) - time.time()) / 3600))
+    bot.send_message(m.chat.id, f"📦 الحزمة: `{status.get('pkg')}`\n⏳ المتبقي: {rem} ساعة.", parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "🎁 تجربة مجانية (24س)")
-def trial(m):
+def free_trial(m):
     db = load_db()
-    aid = db["users"].get(str(m.from_user.id), {}).get("app_id")
-    if not aid: return bot.send_message(m.chat.id, "❌ ادخل من التطبيق أولاً للربط.")
-    if db["app_links"][aid].get("trial_used"):
-        bot.send_message(m.chat.id, "❌ استخدمت الفترة التجريبية سابقاً.")
+    key = db["users"].get(str(m.from_user.id), {}).get("last_key")
+    if not key: return bot.send_message(m.chat.id, "❌ اربط التطبيق أولاً.")
+    if db["app_links"][key].get("trial_used"):
+        bot.send_message(m.chat.id, "❌ استخدمت التجربة سابقاً لهذا التطبيق.")
     else:
-        db["app_links"][aid]["trial_used"] = True
-        db["app_links"][aid]["end_time"] = time.time() + 86400
+        db["app_links"][key]["trial_used"] = True
+        db["app_links"][key]["end_time"] = time.time() + 86400
         save_db(db)
-        bot.send_message(m.chat.id, "✅ تم تفعيل 24 ساعة! عد للتطبيق واضغط **دخول**.")
+        bot.send_message(m.chat.id, "✅ تم تفعيل 24 ساعة لهذا التطبيق.")
 
-@bot.message_handler(func=lambda m: m.text == "نجم1" and m.from_user.id == ADMIN_ID)
-def admin(m):
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🎫 توليد كود (30 يوم)", callback_data="gen_30"))
-    bot.send_message(m.chat.id, "👑 لوحة المدير:", reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda q: q.data == "gen_30")
-def generate(q):
-    code = f"NJM-{str(uuid.uuid4())[:8].upper()}"
-    db = load_db()
-    db["vouchers"][code] = 30
-    save_db(db)
-    bot.edit_message_text(f"🎫 كود جديد:\n`{code}`", q.message.chat.id, q.message.message_id, parse_mode="Markdown")
-
-@bot.message_handler(func=lambda m: m.text == "🎫 تفعيل كود")
-def redeem_start(m):
-    msg = bot.send_message(m.chat.id, "أرسل كود التفعيل:")
-    bot.register_next_step_handler(msg, redeem_final)
-
-def redeem_final(m):
-    code = m.text.strip()
-    db = load_db()
-    if code in db["vouchers"]:
-        days = db["vouchers"].pop(code)
-        aid = db["users"].get(str(m.from_user.id), {}).get("app_id")
-        if aid:
-            db["app_links"][aid]["end_time"] = max(time.time(), db["app_links"][aid]["end_time"]) + (days * 86400)
-            save_db(db)
-            bot.send_message(m.chat.id, f"✅ تم الاشتراك لمدة {days} يوم!")
-        else: bot.send_message(m.chat.id, "❌ اربط جهازك أولاً.")
-    else: bot.send_message(m.chat.id, "❌ كود غير صحيح.")
-
-def run():
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
-
+def run(): app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
 if __name__ == "__main__":
     Thread(target=run).start()
     bot.infinity_polling()
