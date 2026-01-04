@@ -7,53 +7,30 @@ from threading import Thread, Lock
 # --- [ الإعدادات الأساسية ] ---
 API_TOKEN = '8322095833:AAEq5gd2R3HiN9agRdX-R995vHXeWx2oT7g'
 ADMIN_ID = 7650083401
-CHANNEL_ID = "@jrhwm0njm"  # معرف قناتك للهدية
 DATA_FILE = "master_data.json" 
 
 bot = telebot.TeleBot(API_TOKEN)
 app = Flask(__name__)
 db_lock = Lock() 
 
-# باقات الاشتراك (الأيام : السعر بالنجوم XTR)
-SUB_PLANS = {
-    "7": 30,
-    "30": 100,
-    "90": 250,
-    "365": 800
-}
-
 # --- [ إدارة قاعدة البيانات ] ---
 def load_db():
     with db_lock:
         if not os.path.exists(DATA_FILE): 
-            return {"users": {}, "app_links": {}, "vouchers": {}, "coupons": {}, "logs": [], "global_news": "لا توجد أخبار"}
+            return {"users": {}, "app_links": {}, "vouchers": {}, "global_news": "لا توجد أخبار حالياً"}
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f: 
                 db = json.load(f)
-                # ضمان وجود المفاتيح الجديدة
-                for key in ["coupons", "logs", "global_news"]:
-                    if key not in db: db[key] = [] if key == "logs" else {}
+                if "global_news" not in db: db["global_news"] = "لا توجد أخبار حالياً"
+                if "vouchers" not in db: db["vouchers"] = {}
                 return db
-        except: return {"users": {}, "app_links": {}, "vouchers": {}, "coupons": {}, "logs": [], "global_news": "لا توجد أخبار"}
+        except: return {"users": {}, "app_links": {}, "vouchers": {}, "global_news": "لا توجد أخبار حالياً"}
 
 def save_db(db):
     with db_lock:
         with open(DATA_FILE, "w", encoding="utf-8") as f: json.dump(db, f, indent=4) 
 
-def add_log(msg):
-    db = load_db()
-    db["logs"].append(f"[{time.ctime()}] {msg}")
-    if len(db["logs"]) > 100: db["logs"].pop(0)
-    save_db(db)
-
-# فحص الانضمام للقناة
-def is_member(user_id):
-    try:
-        status = bot.get_chat_member(CHANNEL_ID, user_id).status
-        return status in ['member', 'administrator', 'creator']
-    except: return False
-
-# --- [ واجهة API للمطورين ] ---
+# --- [ واجهة API ] ---
 @app.route('/check')
 def check_status():
     aid, pkg = request.args.get('aid'), request.args.get('pkg')
@@ -66,245 +43,262 @@ def check_status():
     if time.time() > data.get("end_time", 0): return "EXPIRED"
     return "ACTIVE" 
 
+@app.route('/get_news') 
+def get_news():
+    return load_db().get("global_news", "لا توجد أخبار")
+
 # --- [ واجهة البوت - البداية ] ---
 @bot.message_handler(commands=['start'])
 def start(m):
     db = load_db()
     uid = str(m.from_user.id)
+    
+    # حفظ اسم المستخدم أو الاسم الحقيقي لتسهيل الإدارة
     username = f"@{m.from_user.username}" if m.from_user.username else m.from_user.first_name
     
-    # إعداد بيانات المستخدم الجديد
-    if uid not in db["users"]:
-        referrer = None
-        args = m.text.split()
-        if len(args) > 1 and args[1].isdigit() and args[1] != uid:
-            referrer = args[1]
-        
-        db["users"][uid] = {
-            "name": username, 
-            "current_app": None, 
-            "referred_by": referrer,
-            "referral_count": 0,
-            "gift_claimed": False
-        }
-        if referrer: add_log(f"مستخدم جديد {uid} دخل بواسطة إحالة من {referrer}")
-
-    db["users"][uid]["name"] = username
+    if uid not in db["users"]: 
+        db["users"][uid] = {"current_app": None, "name": username}
+    else:
+        db["users"][uid]["name"] = username # تحديث الاسم دائماً
     
-    # معالجة ربط الجهاز (Deep Link)
     args = m.text.split()
-    if len(args) > 1 and "_" in args[1]:
+    if len(args) > 1:
         cid = args[1]
         if cid not in db["app_links"]:
-            db["app_links"][cid] = {"end_time": 0, "banned": False, "trial_last_time": 0, "telegram_id": uid, "gift_done": False}
+            db["app_links"][cid] = {"end_time": 0, "banned": False, "trial_last_time": 0, "telegram_id": uid}
         db["app_links"][cid]["telegram_id"] = uid
         db["users"][uid]["current_app"] = cid
-        
-        # ميزة هدية القناة (3 أيام)
-        if not db["app_links"][cid].get("gift_done") and is_member(uid):
-            db["app_links"][cid]["end_time"] = max(time.time(), db["app_links"][cid].get("end_time", 0)) + (3 * 86400)
-            db["app_links"][cid]["gift_done"] = True
-            bot.send_message(m.chat.id, "🎁 **حصلت على 3 أيام مجانية لانضمامك للقناة!**", parse_mode="Markdown")
-            
-            # مكافأة الإحالة للداعي (7 أيام)
-            ref_id = db["users"][uid].get("referred_by")
-            if ref_id and ref_id in db["users"]:
-                ref_app = db["users"][ref_id].get("current_app")
-                if ref_app and ref_app in db["app_links"]:
-                    db["app_links"][ref_app]["end_time"] += (7 * 86400)
-                    db["users"][ref_id]["referral_count"] += 1
-                    try: bot.send_message(ref_id, f"🎊 مبروك! حصلت على 7 أيام إضافية بسبب إحالة ناجحة لـ {username}")
-                    except: pass
-        
         bot.send_message(m.chat.id, "✅ **تم ربط جهازك بنجاح!**", parse_mode="Markdown")
     
     save_db(db)
 
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("📱 تطبيقاتي", callback_data="u_dashboard"),
+        types.InlineKeyboardButton("📱 تطبيقاتي ورصيدي", callback_data="u_dashboard"),
         types.InlineKeyboardButton("🎫 تفعيل كود", callback_data="u_redeem"),
         types.InlineKeyboardButton("🎁 تجربة مجانية", callback_data="u_trial"),
-        types.InlineKeyboardButton("🛒 شراء اشتراك", callback_data="u_buy_menu"),
-        types.InlineKeyboardButton("🔗 إحالاتي ومكافآتي", callback_data="u_referral")
+        types.InlineKeyboardButton("🛒 شراء اشتراك", callback_data="u_buy")
     )
-    bot.send_message(m.chat.id, f"مرحباً بك يا **{username}** 🌟\nاستخدم القائمة للتحكم في اشتراكاتك:", reply_markup=markup, parse_mode="Markdown")
+    bot.send_message(m.chat.id, f"مرحباً بك يا **{username}** 🌟\nاستخدم القائمة أدناه للتحكم في اشتراكاتك:", reply_markup=markup, parse_mode="Markdown")
 
-# --- [ معالجة الأزرار ] ---
+# --- [ معالجة ضغطات الأزرار ] ---
 @bot.callback_query_handler(func=lambda q: True)
 def handle_calls(q):
     uid = str(q.from_user.id)
     db = load_db()
-    bot.answer_callback_query(q.id) # لإزالة التظليل عن الزر فوراً
 
-    if q.data == "u_dashboard": user_dashboard(q.message)
+    if q.data == "u_dashboard":
+        user_dashboard(q.message)
     elif q.data == "u_redeem":
-        msg = bot.send_message(q.message.chat.id, "🎫 **أرسل كود التفعيل أو كود الخصم:**")
+        msg = bot.send_message(q.message.chat.id, "🎫 **أرسل كود التفعيل الآن:**")
         bot.register_next_step_handler(msg, redeem_code_step)
     elif q.data.startswith("redeem_select_"):
-        redeem_select_app(q.message, q.data.replace("redeem_select_", ""))
-    elif q.data == "u_trial": process_trial(q.message)
+        selected_cid = q.data.replace("redeem_select_", "")
+        redeem_select_app(q.message, selected_cid)
+    elif q.data == "u_trial":
+        process_trial(q.message)
     elif q.data.startswith("trial_select_"):
-        trial_select_app(q.message, q.data.replace("trial_select_", ""))
-    elif q.data == "u_buy_menu": send_plans_menu(q.message)
-    elif q.data.startswith("buy_tier_"):
-        process_plan_selection(q.message, q.data.split("_")[2])
-    elif q.data == "u_referral": show_referral_info(q.message)
+        selected_cid = q.data.replace("trial_select_", "")
+        trial_select_app(q.message, selected_cid)
+    elif q.data == "u_buy":
+        send_payment(q.message)
 
     # --- خيارات المدير ---
     elif q.from_user.id == ADMIN_ID:
-        if q.data == "list_all": show_detailed_users(q.message)
+        if q.data == "list_all":
+            show_detailed_users(q.message)
         elif q.data == "gen_key":
-            msg = bot.send_message(q.message.chat.id, "أرسل عدد الأيام للكود:")
+            msg = bot.send_message(q.message.chat.id, "كم عدد الأيام التي تريدها لهذا الكود؟ (أرسل رقماً فقط)")
             bot.register_next_step_handler(msg, process_gen_key)
-        elif q.data == "manual_add":
-            msg = bot.send_message(q.message.chat.id, "أرسل (المعرف + مسافة + عدد الأيام):")
-            bot.register_next_step_handler(msg, process_manual_add)
-        elif q.data == "top_refs": show_top_referrals(q.message)
         elif q.data == "bc_tele":
-            msg = bot.send_message(q.message.chat.id, "ارسل رسالة الإذاعة:")
+            msg = bot.send_message(q.message.chat.id, "ارسل رسالة الإذاعة للتلجرام:")
             bot.register_next_step_handler(msg, do_bc_tele)
+        elif q.data == "bc_app":
+            msg = bot.send_message(q.message.chat.id, "ارسل الخبر الجديد للتطبيق:")
+            bot.register_next_step_handler(msg, do_bc_app)
+        elif q.data in ["ban_op", "unban_op"]:
+            action = "لحظره" if q.data == "ban_op" else "لفك حظره"
+            msg = bot.send_message(q.message.chat.id, f"ارسل المعرف {action}:")
+            bot.register_next_step_handler(msg, process_ban_unban, q.data)
 
-# --- [ وظائف الإحالات والخطط ] ---
+# --- [ وظائف الإدارة المطورة ] ---
 
-def show_referral_info(m):
-    uid = str(m.chat.id)
+def show_detailed_users(m):
     db = load_db()
-    count = db["users"].get(uid, {}).get("referral_count", 0)
-    ref_link = f"https://t.me/{bot.get_me().username}?start={uid}"
-    msg = (f"🔗 **نظام الإحالات**\n\n"
-           f"شارك رابطك واحصل على **7 أيام** لكل شخص ينضم للقناة ويربط جهازه!\n\n"
-           f"👥 عدد إحالاتك الناجحة: `{count}`\n"
-           f"🔗 رابطك:\n`{ref_link}`")
-    bot.send_message(m.chat.id, msg, parse_mode="Markdown")
-
-def send_plans_menu(m):
-    markup = types.InlineKeyboardMarkup()
-    for days, price in SUB_PLANS.items():
-        markup.add(types.InlineKeyboardButton(f"📅 {days} يوم - {price} نجمة", callback_data=f"buy_tier_{days}"))
-    bot.send_message(m.chat.id, "🛒 **اختر باقة الاشتراك المناسبة لك:**", reply_markup=markup)
-
-def process_plan_selection(m, days):
-    db = load_db()
-    uid = str(m.chat.id)
-    cid = db["users"].get(uid, {}).get("current_app")
-    if not cid: return bot.send_message(m.chat.id, "❌ اربط جهازك أولاً من داخل التطبيق.")
+    if not db["app_links"]: return bot.send_message(m.chat.id, "لا توجد أجهزة مسجلة.")
     
-    price = SUB_PLANS[days]
-    bot.send_invoice(m.chat.id, title=f"اشتراك {days} يوم", 
-                     description=f"تفعيل لجهازك: {cid}", 
-                     invoice_payload=f"pay_{days}_{cid}", 
-                     provider_token="", currency="XTR",
-                     prices=[types.LabeledPrice(label="VIP", amount=price)])
+    full_list = "📂 **إحصائيات المشتركين والأجهزة:**\n\n"
+    
+    for cid, data in db["app_links"].items():
+        pkg = cid.split('_', 1)[-1].replace("_", ".")
+        rem_time = data.get("end_time", 0) - time.time()
+        owner_id = data.get("telegram_id", "غير معروف")
+        
+        # جلب اسم المستخدم الحقيقي من قاعدة البيانات
+        owner_name = db["users"].get(owner_id, {}).get("name", "غير معروف")
+        
+        if data.get("banned"): stat = "🔴 محظور"
+        elif rem_time > 0: stat = f"🟢 نشط ({int(rem_time/86400)} يوم)"
+        else: stat = "⚪ منتهي"
+        
+        full_list += f"👤 المستخدم: **{owner_name}**\n"
+        full_list += f"📦 التطبيق: `{pkg}`\n"
+        full_list += f"🆔 المعرف (للحظر أو التفعيل):\n`{cid}`\n"
+        full_list += f"حالة الاشتراك: {stat}\n"
+        full_list += "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+        
+        if len(full_list) > 3500:
+            bot.send_message(m.chat.id, full_list, parse_mode="Markdown")
+            full_list = ""
+    
+    if full_list: bot.send_message(m.chat.id, full_list, parse_mode="Markdown")
 
-# --- [ لوحة المدير ] ---
+def process_gen_key(m):
+    if not m.text.isdigit(): return bot.send_message(m.chat.id, "⚠️ خطأ! يرجى إرسال رقم فقط.")
+    days = int(m.text)
+    code = f"NJM-{str(uuid.uuid4())[:8].upper()}"
+    db = load_db(); db["vouchers"][code] = days; save_db(db)
+    bot.send_message(m.chat.id, f"🎫 **تم إنشاء كود جديد:**\n\nالمدة: `{days}` يوم\nالكود: `{code}`", parse_mode="Markdown")
+
 @bot.message_handler(func=lambda m: m.text == "نجم1" and m.from_user.id == ADMIN_ID)
 def admin_panel(m):
     db = load_db()
+    active_now = sum(1 for x in db["app_links"].values() if x.get("end_time", 0) > time.time())
+    msg = (f"👑 **إدارة نجم الإبداع**\n\n"
+           f"👥 عدد المستخدمين: `{len(db['users'])}`\n"
+           f"⚡ عدد الأجهزة: `{len(db['app_links'])}`\n"
+           f"🟢 النشطين حالياً: `{active_now}`\n")
+    
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("📋 المشتركين", callback_data="list_all"),
-        types.InlineKeyboardButton("🎫 توليد كود", callback_data="gen_key"),
-        types.InlineKeyboardButton("➕ شحن يدوي", callback_data="manual_add"),
-        types.InlineKeyboardButton("🏆 أفضل المسوقين", callback_data="top_refs"),
-        types.InlineKeyboardButton("📢 إذاعة", callback_data="bc_tele")
+        types.InlineKeyboardButton("📋 عرض كل المشتركين", callback_data="list_all"),
+        types.InlineKeyboardButton("🎫 توليد كود مخصص", callback_data="gen_key"),
+        types.InlineKeyboardButton("🚫 حظر جهاز", callback_data="ban_op"),
+        types.InlineKeyboardButton("✅ فك حظر", callback_data="unban_op"),
+        types.InlineKeyboardButton("📢 إعلان تطبيق", callback_data="bc_app"),
+        types.InlineKeyboardButton("📢 إعلان تلجرام", callback_data="bc_tele")
     )
-    bot.send_message(m.chat.id, "👑 **لوحة تحكم نجم الإبداع**", reply_markup=markup)
+    bot.send_message(m.chat.id, msg, reply_markup=markup, parse_mode="Markdown")
 
-def show_top_referrals(m):
-    db = load_db()
-    # ترتيب المستخدمين حسب عدد الإحالات
-    top = sorted(db["users"].items(), key=lambda x: x[1].get("referral_count", 0), reverse=True)[:10]
-    msg = "🏆 **أفضل 10 داعين:**\n\n"
-    for i, (uid, data) in enumerate(top, 1):
-        msg += f"{i}- {data['name']} : `{data.get('referral_count', 0)}` إحالة\n"
-    bot.send_message(m.chat.id, msg)
-
-def process_manual_add(m):
-    try:
-        parts = m.text.split()
-        cid, days = parts[0], int(parts[1])
-        db = load_db()
-        if cid in db["app_links"]:
-            db["app_links"][cid]["end_time"] = max(time.time(), db["app_links"][cid].get("end_time", 0)) + (days * 86400)
-            save_db(db)
-            bot.send_message(m.chat.id, f"✅ تم شحن {days} يوم للجهاز بنجاح.")
-        else: bot.send_message(m.chat.id, "❌ المعرف غير موجود.")
-    except: bot.send_message(m.chat.id, "⚠️ صيغة خاطئة. ارسل: المعرف أيام")
-
-# --- [ استكمال منطق التفعيل ] ---
+# --- [ منطق المستخدم ] ---
 
 def user_dashboard(m):
-    db = load_db(); uid = str(m.chat.id)
+    db = load_db()
+    uid = str(m.chat.id)
     user_apps = [k for k, v in db["app_links"].items() if v.get("telegram_id") == uid]
-    if not user_apps: return bot.send_message(m.chat.id, "❌ لا توجد أجهزة مرتبطة.")
+    if not user_apps: return bot.send_message(m.chat.id, "❌ لا توجد تطبيقات مرتبطة.")
     
-    msg = "👤 **أجهزتك المرتبطة:**\n"
+    msg = "👤 **حالة اشتراكاتك:**\n"
     for cid in user_apps:
         data = db["app_links"][cid]
+        pkg = cid.split('_', 1)[-1].replace("_", ".")
         rem_time = data.get("end_time", 0) - time.time()
         status = f"✅ {int(rem_time/86400)} يوم" if rem_time > 0 else "❌ منتهي"
-        msg += f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n🆔 `{cid}`\nالحالة: {status}\n"
+        if data.get("banned"): status = "🚫 محظور"
+        msg += f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n📦 `{pkg}`\nStatus: {status}\n"
     bot.send_message(m.chat.id, msg, parse_mode="Markdown")
 
 def redeem_code_step(m):
     code = m.text.strip()
-    db = load_db(); uid = str(m.from_user.id)
+    db = load_db()
+    if code not in db["vouchers"]:
+        return bot.send_message(m.chat.id, "❌ الكود غير صحيح أو تم استخدامه.")
     
-    if code in db["vouchers"]:
-        user_apps = [k for k, v in db["app_links"].items() if v.get("telegram_id") == uid]
-        if not user_apps: return bot.send_message(m.chat.id, "❌ اربط جهازاً أولاً.")
-        db["users"][uid]["temp_code"] = code
-        save_db(db)
-        markup = types.InlineKeyboardMarkup()
-        for cid in user_apps:
-            markup.add(types.InlineKeyboardButton(f"تفعيل لـ {cid[:10]}...", callback_data=f"redeem_select_{cid}"))
-        bot.send_message(m.chat.id, "اختر الجهاز المراد تفعيله:", reply_markup=markup)
-    else:
-        bot.send_message(m.chat.id, "❌ الكود غير صحيح.")
+    uid = str(m.from_user.id)
+    user_apps = [k for k, v in db["app_links"].items() if v.get("telegram_id") == uid]
+    if not user_apps:
+        return bot.send_message(m.chat.id, "❌ لا توجد تطبيقات مرتبطة بحسابك.")
+    
+    db["users"][uid]["temp_code"] = code
+    save_db(db)
+    
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for cid in user_apps:
+        pkg = cid.split('_', 1)[-1].replace("_", ".")
+        markup.add(types.InlineKeyboardButton(f"📦 {pkg}", callback_data=f"redeem_select_{cid}"))
+    
+    bot.send_message(m.chat.id, "🛠️ **اختر التطبيق لتفعيل الكود عليه:**", reply_markup=markup)
 
 def redeem_select_app(m, selected_cid):
-    db = load_db(); uid = str(m.chat.id)
+    db = load_db()
+    uid = str(m.chat.id)
     code = db["users"].get(uid, {}).pop("temp_code", None)
-    if code and code in db["vouchers"]:
-        days = db["vouchers"].pop(code)
-        db["app_links"][selected_cid]["end_time"] = max(time.time(), db["app_links"][selected_cid].get("end_time", 0)) + (days * 86400)
-        save_db(db)
-        bot.send_message(m.chat.id, f"✅ تم تفعيل {days} يوم بنجاح!")
+    if not code or code not in db["vouchers"]:
+        return bot.send_message(m.chat.id, "❌ خطأ في الكود أو انتهت الجلسة.")
+    
+    days = db["vouchers"].pop(code)
+    db["app_links"][selected_cid]["end_time"] = max(time.time(), db["app_links"][selected_cid].get("end_time", 0)) + (days * 86400)
+    save_db(db)
+    bot.send_message(m.chat.id, f"✅ تم تفعيل {days} يوم بنجاح على التطبيق المختار!")
 
 def process_trial(m):
-    db = load_db(); uid = str(m.chat.id)
+    db = load_db()
+    uid = str(m.chat.id)
     user_apps = [k for k, v in db["app_links"].items() if v.get("telegram_id") == uid]
-    if not user_apps: return bot.send_message(m.chat.id, "❌ اربط جهازاً أولاً.")
-    markup = types.InlineKeyboardMarkup()
+    if not user_apps:
+        return bot.send_message(m.chat.id, "❌ لا توجد تطبيقات مرتبطة بحسابك.")
+    
+    markup = types.InlineKeyboardMarkup(row_width=1)
     for cid in user_apps:
-        markup.add(types.InlineKeyboardButton(f"تجربة لـ {cid[:10]}...", callback_data=f"trial_select_{cid}"))
-    bot.send_message(m.chat.id, "اختر الجهاز للتجربة:", reply_markup=markup)
+        pkg = cid.split('_', 1)[-1].replace("_", ".")
+        markup.add(types.InlineKeyboardButton(f"📦 {pkg}", callback_data=f"trial_select_{cid}"))
+    
+    bot.send_message(m.chat.id, "🛠️ **اختر التطبيق لتفعيل التجربة المجانية عليه:**", reply_markup=markup)
 
 def trial_select_app(m, selected_cid):
-    db = load_db(); data = db["app_links"][selected_cid]
-    if time.time() - data.get("trial_last_time", 0) < 86400:
-        return bot.send_message(m.chat.id, "❌ مسموح مرة كل 24 ساعة.")
-    data["trial_last_time"] = time.time()
-    data["end_time"] = max(time.time(), data.get("end_time", 0)) + 10800 # 3 ساعات
+    db = load_db()
+    if selected_cid not in db["app_links"]:
+        return bot.send_message(m.chat.id, "❌ حدث خطأ في التعرف على الجهاز.")
+        
+    data = db["app_links"][selected_cid]
+    current_time = time.time()
+    last_trial = data.get("trial_last_time", 0)
+    
+    # تجربة لكل تطبيق مرة كل 24 ساعة
+    if current_time - last_trial < 86400:
+        return bot.send_message(m.chat.id, "❌ يمكنك استخدام التجربة مرة واحدة فقط كل 24 ساعة لكل تطبيق.")
+    
+    data["trial_last_time"] = current_time
+    data["end_time"] = max(current_time, data.get("end_time", 0)) + 10800  # 3 ساعات
     save_db(db)
-    bot.send_message(m.chat.id, "✅ تم تفعيل 3 ساعات تجربة!")
+    bot.send_message(m.chat.id, "✅ تم تفعيل 3 ساعات تجربة مجانية لهذا التطبيق!")
 
-# --- [ الدفع والسداد ] ---
+def send_payment(m):
+    db = load_db(); uid = str(m.chat.id)
+    cid = db["users"].get(uid, {}).get("current_app")
+    if not cid: return bot.send_message(m.chat.id, "❌ افتح التطبيق أولاً.")
+    bot.send_invoice(m.chat.id, title="اشتراك 30 يوم", description=f"للحساب: {cid}", 
+                     invoice_payload=f"pay_{cid}", provider_token="", currency="XTR",
+                     prices=[types.LabeledPrice(label="VIP", amount=100)])
+
+# --- [ وظائف مساعدة ] ---
+def do_bc_tele(m):
+    db = load_db(); count = 0
+    for uid in db["users"]:
+        try: bot.send_message(uid, f"📢 **إشعار من الإدارة:**\n\n{m.text}"); count += 1
+        except: pass
+    bot.send_message(m.chat.id, f"✅ تم الإرسال لـ {count}")
+
+def do_bc_app(m):
+    db = load_db(); db["global_news"] = m.text; save_db(db)
+    bot.send_message(m.chat.id, "✅ تم تحديث خبر التطبيق.")
+
+def process_ban_unban(m, mode):
+    db = load_db(); target = m.text.strip()
+    if target in db["app_links"]:
+        db["app_links"][target]["banned"] = (mode == "ban_op")
+        save_db(db); bot.send_message(m.chat.id, "✅ تم تحديث حالة الجهاز بنجاح.")
+    else: bot.send_message(m.chat.id, "❌ المعرف غير موجود. تأكد من نسخ المعرف الصحيح من القائمة.")
+
 @bot.pre_checkout_query_handler(func=lambda q: True)
 def checkout(q): bot.answer_pre_checkout_query(q.id, ok=True) 
 
 @bot.message_handler(content_types=['successful_payment'])
 def pay_success(m):
-    payload = m.successful_payment.invoice_payload.split("_")
-    days = int(payload[1])
-    cid = "_".join(payload[2:])
-    db = load_db()
-    if cid in db["app_links"]:
-        db["app_links"][cid]["end_time"] = max(time.time(), db["app_links"][cid].get("end_time", 0)) + (days * 86400)
-        save_db(db)
-        bot.send_message(m.chat.id, f"✅ تم شراء {days} يوم بنجاح!")
-        add_log(f"عملية شراء ناجحة: {days} يوم للجهاز {cid}")
+    db = load_db(); cid = m.successful_payment.invoice_payload.replace("pay_", "")
+    current_end = max(time.time(), db["app_links"][cid].get("end_time", 0))
+    db["app_links"][cid]["end_time"] = current_end + (30 * 86400)
+    save_db(db); bot.send_message(m.chat.id, "✅ تم الشراء بنجاح!")
 
 # --- [ التشغيل ] ---
 def run():
