@@ -54,13 +54,8 @@ def check_status():
     data = db["app_links"].get(uid)
     if not data: return "EXPIRED"
     if data.get("banned"): return "BANNED"
-    
-    rem_time = data.get("end_time", 0) - time.time()
-    if rem_time <= 0: return "EXPIRED"
-    
-    # حساب الأيام المتبقية لإرسالها للتطبيق
-    days = int(rem_time / 86400)
-    return f"ACTIVE|{days}" # إرجاع الحالة مع عدد الأيام
+    if time.time() > data.get("end_time", 0): return "EXPIRED"
+    return "ACTIVE" 
 
 @app.route('/get_news') 
 def get_news():
@@ -73,6 +68,7 @@ def start(m):
     uid = str(m.from_user.id)
     username = f"@{m.from_user.username}" if m.from_user.username else m.from_user.first_name
     
+    # منطق الإحالة (Referral)
     args = m.text.split()
     is_new_user = uid not in db["users"]
     
@@ -89,6 +85,7 @@ def start(m):
     else:
         db["users"][uid]["name"] = username
 
+    # ربط الجهاز (Deep Link من التطبيق)
     if len(args) > 1 and "_" in args[1]:
         cid = args[1]
         if cid not in db["app_links"]:
@@ -97,11 +94,13 @@ def start(m):
         db["app_links"][cid]["telegram_id"] = uid
         db["users"][uid]["current_app"] = cid
         
+        # هدية الانضمام للقناة (3 أيام)
         if check_membership(uid) and not db["app_links"][cid].get("gift_claimed"):
             db["app_links"][cid]["end_time"] = max(time.time(), db["app_links"][cid].get("end_time", 0)) + (3 * 86400)
             db["app_links"][cid]["gift_claimed"] = True
             bot.send_message(m.chat.id, "🎁 **مبروك! حصلت على 3 أيام مجانية لانضمامك لقناتنا.**", parse_mode="Markdown")
             
+            # مكافأة الداعي (7 أيام)
             inviter = db["users"][uid].get("invited_by")
             if inviter and inviter in db["users"]:
                 inviter_app = db["users"][inviter].get("current_app")
@@ -125,6 +124,7 @@ def start(m):
     )
     bot.send_message(m.chat.id, f"مرحباً بك يا **{username}** 🌟\nقناتنا: {CHANNEL_ID}\nاستخدم القائمة أدناه للتحكم في اشتراكاتك:", reply_markup=markup, parse_mode="Markdown")
 
+# --- [ معالجة ضغطات الأزرار ] ---
 @bot.callback_query_handler(func=lambda q: True)
 def handle_calls(q):
     uid = str(q.from_user.id)
@@ -148,6 +148,7 @@ def handle_calls(q):
     elif q.data == "u_buy":
         send_payment(q.message)
 
+    # --- خيارات المدير ---
     elif q.from_user.id == ADMIN_ID:
         if q.data == "list_all":
             show_detailed_users(q.message)
@@ -168,6 +169,8 @@ def handle_calls(q):
             action = "لحظره" if q.data == "ban_op" else "لفك حظره"
             msg = bot.send_message(q.message.chat.id, f"ارسل المعرف {action}:")
             bot.register_next_step_handler(msg, process_ban_unban, q.data)
+
+# --- [ وظائف الإدارة ] ---
 
 def show_detailed_users(m):
     db = load_db()
@@ -214,6 +217,8 @@ def admin_panel(m):
         types.InlineKeyboardButton("📢 إعلان تلجرام", callback_data="bc_tele")
     )
     bot.send_message(m.chat.id, msg, reply_markup=markup, parse_mode="Markdown")
+
+# --- [ منطق المستخدم ] ---
 
 def show_referral_info(m):
     uid = str(m.chat.id)
@@ -287,21 +292,26 @@ def send_payment(m):
                      invoice_payload=f"pay_{cid}", provider_token="", currency="XTR",
                      prices=[types.LabeledPrice(label="VIP", amount=100)])
 
+# --- [ خيوط الخلفية (Background Threads) ] ---
+
 def expiry_notifier():
+    """فحص الاشتراكات وإرسال تنبيه قبل الانتهاء بـ 24 ساعة"""
     while True:
         try:
             db = load_db()
             now = time.time()
             for cid, data in db["app_links"].items():
                 rem = data.get("end_time", 0) - now
+                # إذا كان متبقي بين 23 و 24 ساعة ولم يتم إرسال تنبيه
                 if 82800 < rem < 86400:
                     uid = data.get("telegram_id")
                     if uid:
                         try: bot.send_message(uid, f"⚠️ تنبيه: اشتراكك في التطبيق `{cid.split('_')[-1]}` سينتهي خلال 24 ساعة!")
                         except: pass
-            time.sleep(3600)
+            time.sleep(3600) # فحص كل ساعة
         except: time.sleep(60)
 
+# --- [ وظائف مساعدة ] ---
 def do_bc_tele(m):
     db = load_db(); count = 0
     for uid in db["users"]:
@@ -343,5 +353,5 @@ def run():
 
 if __name__ == "__main__":
     Thread(target=run).start()
-    Thread(target=expiry_notifier).start()
+    Thread(target=expiry_notifier).start() # تشغيل خيط التنبيهات
     bot.infinity_polling()
