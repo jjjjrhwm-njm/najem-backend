@@ -278,7 +278,7 @@ def start(m):
         
         # رسالة الترحيب المزخرفة
         welcome_msg = decorate_message(
-            f"**مرحباً {get_user_title(uid)}!**\n\n"
+            f"**مرحباً {m.from_user.first_name} {get_user_title(uid)}!**\n\n"
             f"{EMOJIS['check']} **تم ربط جهازك بنجاح!**\n"
             f"{EMOJIS['link']} **المعرف القصير:** `{short_id}`\n"
             f"{EMOJIS['key']} **المعرف الكامل:**\n`{cid}`\n\n"
@@ -291,7 +291,7 @@ def start(m):
     # أزرار القائمة الرئيسية (مزخرفة)
     user_title = get_user_title(m.from_user.id)
     welcome_text = decorate_message(
-        f"**{user_title}**\n\n"
+        f"**{m.from_user.first_name} {user_title}**\n\n"
         f"{EMOJIS['heart']} مرحباً بك في نظام نجم الإبداع\n"
         f"{EMOJIS['gear']} اختر من القائمة أدناه:",
         emoji=EMOJIS['star']
@@ -371,7 +371,7 @@ def user_dashboard(m):
         return bot.send_message(m.chat.id, error_msg, parse_mode="Markdown")
     
     user_title = get_user_title(m.chat.id)
-    msg = decorate_message(f"**👤 {user_title}**\n\n", emoji=EMOJIS['app'])
+    msg = decorate_message(f"**👤 {m.from_user.first_name} {user_title}**\n\n", emoji=EMOJIS['app'])
     msg += "**📱 تطبيقاتك الحالية:**\n"
     msg += "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n"
     
@@ -749,8 +749,7 @@ def admin_panel(m):
         types.InlineKeyboardButton(f"{EMOJIS['ban']} حظر جهاز", callback_data="ban_op"),
         types.InlineKeyboardButton(f"{EMOJIS['unlock']} فك حظر", callback_data="unban_op"),
         types.InlineKeyboardButton(f"{EMOJIS['bell']} إعلان تطبيق", callback_data="bc_app"),
-        types.InlineKeyboardButton(f"{EMOJIS['news']} إعلان تلجرام", callback_data="bc_tele"),
-        types.InlineKeyboardButton(f"{EMOJIS['gear']} إعدادات", callback_data="admin_settings")
+        types.InlineKeyboardButton(f"{EMOJIS['news']} إعلان تلجرام", callback_data="bc_tele")
     )
     
     bot.send_message(m.chat.id, msg, reply_markup=markup, parse_mode="Markdown")
@@ -774,7 +773,7 @@ def do_bc_tele(m):
             count += 1
         except: 
             failed += 1
-        time.sleep(0.1)  # تجنب حظر التلجرام
+        time.sleep(0.05)  # تجنب حظر التلجرام
     
     result_msg = decorate_message(
         f"**✅ تم الإرسال بنجاح**\n\n"
