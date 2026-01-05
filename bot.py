@@ -115,6 +115,10 @@ def start(m):
     save_db(db)
 
     markup = types.InlineKeyboardMarkup(row_width=2)
+    
+    # الزر الجديد المطلوب (زر طويل أحمر في البداية)
+    markup.add(types.InlineKeyboardButton("🔴 انضم للقناه لتحصل على اشتراك شهر مجانًا 🔴", url=f"https://t.me/{CHANNEL_ID.replace('@', '')}"))
+    
     markup.add(
         types.InlineKeyboardButton("📱 تطبيقاتي ورصيدي", callback_data="u_dashboard"),
         types.InlineKeyboardButton("🎫 تفعيل كود", callback_data="u_redeem"),
@@ -281,8 +285,9 @@ def trial_select_app(m, selected_cid):
     if time.time() - data.get("trial_last_time", 0) < 86400:
         return bot.send_message(m.chat.id, "❌ التجربة متاحة مرة كل 24 ساعة.")
     data["trial_last_time"] = time.time()
-    data["end_time"] = max(time.time(), data.get("end_time", 0)) + 10800
-    save_db(db); bot.send_message(m.chat.id, "✅ تم تفعيل 3 ساعات تجربة!")
+    # تم تعديل وقت التجربة من 10800 (3 ساعات) إلى 604800 (أسبوع واحد)
+    data["end_time"] = max(time.time(), data.get("end_time", 0)) + 604800
+    save_db(db); bot.send_message(m.chat.id, "✅ تم تفعيل أسبوع تجربة مجانية بنجاح!")
 
 def send_payment(m):
     db = load_db(); uid = str(m.chat.id)
