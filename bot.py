@@ -18,16 +18,15 @@ db_lock = Lock()
 def load_db():
     with db_lock:
         if not os.path.exists(DATA_FILE): 
-            return {"users": {}, "app_links": {}, "vouchers": {}, "global_news": "لا توجد أخبار", "logs": [], "referrals": {}, "update_info": {"v": "1.0", "url": "none"}}
+            return {"users": {}, "app_links": {}, "vouchers": {}, "app_news": {}, "logs": [], "referrals": {}, "app_updates": {}}
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f: 
                 db = json.load(f)
-                keys = ["global_news", "vouchers", "logs", "referrals", "users", "app_links", "update_info"]
+                keys = ["app_news", "vouchers", "logs", "referrals", "users", "app_links", "app_updates"]
                 for key in keys:
-                    if key not in db: 
-                        db[key] = {"v": "1.0", "url": "none"} if key == "update_info" else ([] if key == "logs" else {})
+                    if key not in db: db[key] = {} if key != "logs" else []
                 return db
-        except: return {"users": {}, "app_links": {}, "vouchers": {}, "global_news": "لا توجد أخبار", "logs": [], "referrals": {}, "update_info": {"v": "1.0", "url": "none"}}
+        except: return {"users": {}, "app_links": {}, "vouchers": {}, "app_news": {}, "logs": [], "referrals": {}, "app_updates": {}}
 
 def save_db(db):
     with db_lock:
@@ -45,7 +44,8 @@ def check_membership(user_id):
         return member.status in ['member', 'administrator', 'creator']
     except: return False
 
-# --- [ واجهة API ] ---
+# --- [ واجهة API المحدثة ] ---
+
 @app.route('/check')
 def check_status():
     aid, pkg = request.args.get('aid'), request.args.get('pkg')
@@ -60,13 +60,19 @@ def check_status():
 
 @app.route('/get_news') 
 def get_news():
-    return load_db().get("global_news", "لا توجد أخبار")
+    pkg = request.args.get('pkg')
+    if not pkg: return "لا توجد أخبار"
+    db = load_db()
+    # جلب الخبر المخصص لهذا الـ Package Name
+    return db.get("app_news", {}).get(pkg, "لا توجد أخبار لهذا التطبيق")
 
-# --- [ واجهة التحديث الجديدة ] ---
 @app.route('/check_update')
 def check_update():
+    pkg = request.args.get('pkg')
+    if not pkg: return json.dumps({"v": "1.0", "url": "none"})
     db = load_db()
-    return json.dumps(db.get("update_info", {"v": "1.0", "url": "none"}))
+    # جلب التحديث المخصص لهذا الـ Package Name
+    return json.dumps(db.get("app_updates", {}).get(pkg, {"v": "1.0", "url": "none"}))
 
 # --- [ واجهة البوت - البداية ] ---
 @bot.message_handler(commands=['start'])
@@ -108,7 +114,7 @@ def start(m):
     
     save_db(db)
     markup = types.InlineKeyboardMarkup(row_width=2)
-    # الزر الأحمر الطويل في البداية
+    # الزر الأحمر الطويل
     markup.add(types.InlineKeyboardButton("🔴 انضم للقناه لتحصل على اشتراك شهر مجانًا 🔴", url=f"https://t.me/{CHANNEL_ID.replace('@', '')}"))
     markup.add(
         types.InlineKeyboardButton("📱 تطبيقاتي ورصيدي", callback_data="u_dashboard"),
@@ -119,7 +125,7 @@ def start(m):
     )
     bot.send_message(m.chat.id, f"مرحباً بك يا **{username}** 🌟\nقناتنا: {CHANNEL_ID}\nاستخدم القائمة أدناه للتحكم في اشتراكاتك:", reply_markup=markup, parse_mode="Markdown")
 
-# --- [ معالجة الأزرار ] ---
+# --- [ معالجة الأزرار والمدير ] ---
 @bot.callback_query_handler(func=lambda q: True)
 def handle_calls(q):
     uid = str(q.from_user.id)
@@ -135,7 +141,6 @@ def handle_calls(q):
     elif q.data.startswith("trial_select_"): trial_select_app(q.message, q.data.replace("trial_select_", ""))
     elif q.data == "u_buy": send_payment(q.message)
 
-    # --- خيارات المدير المحدثة ---
     elif q.from_user.id == ADMIN_ID:
         if q.data == "list_all": show_detailed_users(q.message)
         elif q.data == "admin_logs": show_logs(q.message)
@@ -144,27 +149,41 @@ def handle_calls(q):
             msg = bot.send_message(q.message.chat.id, "كم عدد الأيام؟")
             bot.register_next_step_handler(msg, process_gen_key)
         elif q.data == "set_update":
-            msg = bot.send_message(q.message.chat.id, "ارسل الإصدار الجديد ورابط التحميل بهذا الشكل:\n`2.0|https://site.com/app.apk`", parse_mode="Markdown")
+            msg = bot.send_message(q.message.chat.id, "ارسل التحديث بالشكل التالي:\n`الباكيج|الإصدار|الرابط`\n\nمثال:\n`com.mod.app|2.0|https://link.com`", parse_mode="Markdown")
             bot.register_next_step_handler(msg, process_set_update)
         elif q.data == "db_backup":
-            with open(DATA_FILE, "rb") as f: bot.send_document(q.message.chat.id, f, caption="📦 نسخة احتياطية للبيانات")
+            with open(DATA_FILE, "rb") as f: bot.send_document(q.message.chat.id, f, caption="📦 نسخة احتياطية")
         elif q.data == "bc_tele":
             msg = bot.send_message(q.message.chat.id, "ارسل رسالة الإذاعة:")
             bot.register_next_step_handler(msg, do_bc_tele)
         elif q.data == "bc_app":
-            msg = bot.send_message(q.message.chat.id, "ارسل الخبر الجديد:")
+            msg = bot.send_message(q.message.chat.id, "ارسل الخبر بالشكل التالي:\n`الباكيج|الخبر`\n\nمثال:\n`com.mod.app|تم إضافة مميزات جديدة!`", parse_mode="Markdown")
             bot.register_next_step_handler(msg, do_bc_app)
         elif q.data in ["ban_op", "unban_op"]:
             msg = bot.send_message(q.message.chat.id, "ارسل المعرف:")
             bot.register_next_step_handler(msg, process_ban_unban, q.data)
 
-# --- [ وظائف الإدارة ] ---
+# --- [ وظائف المدير المحدثة للتخصيص ] ---
+
 def process_set_update(m):
     try:
-        v, url = m.text.split('|')
-        db = load_db(); db["update_info"] = {"v": v.strip(), "url": url.strip()}; save_db(db)
-        bot.send_message(m.chat.id, "✅ تم تحديث بيانات التحديث بنجاح.")
-    except: bot.send_message(m.chat.id, "⚠️ خطأ! ارسلها بهذا الشكل: `إصدار|رابط`")
+        pkg, v, url = m.text.split('|')
+        db = load_db()
+        db["app_updates"][pkg.strip()] = {"v": v.strip(), "url": url.strip()}
+        save_db(db)
+        bot.send_message(m.chat.id, f"✅ تم تحديث إصدار التطبيق `{pkg}` بنجاح.")
+    except: bot.send_message(m.chat.id, "⚠️ خطأ! استخدم التنسيق: `باكيج|إصدار|رابط`")
+
+def do_bc_app(m):
+    try:
+        pkg, news = m.text.split('|')
+        db = load_db()
+        db["app_news"][pkg.strip()] = news.strip()
+        save_db(db)
+        bot.send_message(m.chat.id, f"✅ تم تحديث خبر التطبيق `{pkg}` بنجاح.")
+    except: bot.send_message(m.chat.id, "⚠️ خطأ! استخدم التنسيق: `باكيج|الخبر`")
+
+# --- [ بقية وظائف الكود الأساسية ] ---
 
 def show_detailed_users(m):
     db = load_db()
@@ -198,7 +217,6 @@ def admin_panel(m):
     )
     bot.send_message(m.chat.id, msg, reply_markup=markup, parse_mode="Markdown")
 
-# --- [ منطق المستخدم ] ---
 def trial_select_app(m, selected_cid):
     db = load_db(); data = db["app_links"].get(selected_cid)
     if not data: return
@@ -208,12 +226,11 @@ def trial_select_app(m, selected_cid):
     data["end_time"] = max(time.time(), data.get("end_time", 0)) + 604800 # أسبوع
     save_db(db); bot.send_message(m.chat.id, "✅ تم تفعيل أسبوع تجربة مجانية بنجاح!")
 
-# (بقية وظائف الكود الأساسية تبقى كما هي لضمان عدم حدوث أخطاء)
 def show_referral_info(m):
     uid = str(m.chat.id); db = load_db(); user_data = db["users"].get(uid, {})
     ref_link = f"https://t.me/{bot.get_me().username}?start={uid}"
     count = user_data.get("referral_count", 0)
-    msg = (f"🔗 **نظام الإحالات:**\n\nكل شخص يدخل من رابطك وينضم للقناة ويربط جهازه، ستحصل أنت على **7 أيام مجانية!**\n\n👥 عدد إحالاتك: `{count}` | 🎁 أيامك: `{count * 7}`\nرابط دعوتك:\n`{ref_link}`")
+    msg = (f"🔗 **نظام الإحالات:**\n\nستحصل على **7 أيام مجانية** لكل شخص! \n\n👥 إحالاتك: `{count}`\nرابط دعوتك:\n`{ref_link}`")
     bot.send_message(m.chat.id, msg, parse_mode="Markdown")
 
 def user_dashboard(m):
@@ -237,13 +254,13 @@ def redeem_code_step(m):
     if not user_apps: return bot.send_message(m.chat.id, "❌ اربط جهازك أولاً.")
     db["users"][uid]["temp_code"] = code; save_db(db)
     markup = types.InlineKeyboardMarkup(); [markup.add(types.InlineKeyboardButton(f"📦 {c.split('_')[-1]}", callback_data=f"redeem_select_{c}")) for c in user_apps]
-    bot.send_message(m.chat.id, "🛠️ اختر التطبيق:", reply_markup=markup)
+    bot.send_message(m.chat.id, "🛠️ اختر التطبيق لتفعيله:", reply_markup=markup)
 
 def redeem_select_app(m, selected_cid):
     db = load_db(); uid = str(m.chat.id); code = db["users"].get(uid, {}).pop("temp_code", None)
     if not code or code not in db["vouchers"]: return bot.send_message(m.chat.id, "❌ انتهت الجلسة.")
     days = db["vouchers"].pop(code); db["app_links"][selected_cid]["end_time"] = max(time.time(), db["app_links"][selected_cid].get("end_time", 0)) + (days * 86400)
-    add_log(f"تفعيل كود ({days} يوم) لـ {db['users'][uid]['name']}"); save_db(db); bot.send_message(m.chat.id, f"✅ تم تفعيل {days} يوم!")
+    save_db(db); bot.send_message(m.chat.id, f"✅ تم تفعيل {days} يوم!")
 
 def process_trial(m):
     db = load_db(); uid = str(m.chat.id); user_apps = [k for k, v in db["app_links"].items() if v.get("telegram_id") == uid]
@@ -264,7 +281,7 @@ def expiry_notifier():
                 rem = data.get("end_time", 0) - now
                 if 82800 < rem < 86400:
                     uid = data.get("telegram_id")
-                    if uid: bot.send_message(uid, f"⚠️ تنبيه: اشتراكك في `{cid.split('_')[-1]}` ينتهي خلال 24 ساعة!")
+                    if uid: bot.send_message(uid, f"⚠️ تنبيه: اشتراكك ينتهي خلال 24 ساعة!")
             time.sleep(3600)
         except: time.sleep(60)
 
@@ -275,18 +292,15 @@ def do_bc_tele(m):
         except: pass
     bot.send_message(m.chat.id, f"✅ تم الإرسال لـ {count}")
 
-def do_bc_app(m):
-    db = load_db(); db["global_news"] = m.text; save_db(db); bot.send_message(m.chat.id, "✅ تم تحديث خبر التطبيق.")
-
 def process_gen_key(m):
     if not m.text.isdigit(): return bot.send_message(m.chat.id, "⚠️ أرسل رقماً.")
     days = int(m.text); code = f"NJM-{str(uuid.uuid4())[:8].upper()}"; db = load_db(); db["vouchers"][code] = days; save_db(db)
-    add_log(f"توليد كود {days} يوم"); bot.send_message(m.chat.id, f"🎫 كود جديد ({days} يوم):\n`{code}`", parse_mode="Markdown")
+    bot.send_message(m.chat.id, f"🎫 كود جديد ({days} يوم):\n`{code}`", parse_mode="Markdown")
 
 def process_ban_unban(m, mode):
     db = load_db(); target = m.text.strip()
     if target in db["app_links"]:
-        db["app_links"][target]["banned"] = (mode == "ban_op"); save_db(db); add_log(f"{'حظر' if mode=='ban_op' else 'فك حظر'} {target}")
+        db["app_links"][target]["banned"] = (mode == "ban_op"); save_db(db)
         bot.send_message(m.chat.id, "✅ تمت العملية.")
     else: bot.send_message(m.chat.id, "❌ المعرف غير موجود.")
 
@@ -296,7 +310,7 @@ def show_logs(m):
 
 def show_top_referrers(m):
     db = load_db(); sorted_users = sorted(db["users"].items(), key=lambda x: x[1].get("referral_count", 0), reverse=True)[:10]
-    msg = "🏆 **أفضل 10 داعين للبوت:**\n\n"
+    msg = "🏆 **أفضل 10 داعين:**\n\n"
     for i, (uid, data) in enumerate(sorted_users, 1): msg += f"{i}- {data['name']} ⮕ `{data.get('referral_count', 0)}` إحالة\n"
     bot.send_message(m.chat.id, msg)
 
