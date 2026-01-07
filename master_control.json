@@ -1,5 +1,11 @@
 {
   "users": {},
+  "app_links": {},
+  "vouchers": {},
+  "app_news": {},
+  "logs": [],
+  "referrals": {},
+  "app_updates": {},
   "config": {
     "maintenance": false,
     "announcement": "لا يوجد إعلانات حالياً",
