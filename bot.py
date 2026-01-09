@@ -19,7 +19,7 @@ def load_db():
         if not os.path.exists(DATA_FILE):
             return {
                 "users": {}, "app_links": {}, "vouchers": {}, 
-                "settings": {"news": "مرحباً بكم في تطبيق نجم الإبداع", "price": 100, "trial_hours": 2},
+                "settings": {"news": "مرحباً بكم في تطبيق نجم الإبداع", "price": 100, "trial_days": 2},
                 "stats": {"total_revenue": 0}
             }
         try:
@@ -28,7 +28,7 @@ def load_db():
                 # ضمان وجود المفاتيح الأساسية
                 for key in ["users", "app_links", "vouchers", "settings", "stats"]:
                     if key not in db: db[key] = {}
-                if not db["settings"]: db["settings"] = {"news": "لا توجد أخبار", "price": 100, "trial_hours": 2}
+                if not db["settings"]: db["settings"] = {"news": "لا توجد أخبار", "price": 100, "trial_days": 2}
                 return db
         except: return {"users": {}, "app_links": {}, "vouchers": {}, "settings": {}, "stats": {}}
 
@@ -64,7 +64,8 @@ def start(m):
     args = m.text.split()
     if len(args) > 1:
         cid = args[1] # المعرف القادم من التطبيق
-        db["app_links"].setdefault(cid, {"end_time": 0, "banned": False, "trial_used": False})
+        pkg = cid.split('_', 1)[1].replace('_', '.') if '_' in cid else "غير معروف"
+        db["app_links"].setdefault(cid, {"end_time": 0, "banned": False, "trial_used": False, "app_name": pkg})
         db["app_links"][cid]["telegram_id"] = uid
         db["users"][uid]["current_app"] = cid
         save_db(db)
@@ -90,8 +91,9 @@ def user_dashboard(m):
         rem_time = data.get("end_time", 0) - time.time()
         status = "✅ نشط" if rem_time > 0 else "❌ منتهي"
         if data.get("banned"): status = "🚫 محظور"
+        app_name = data.get("app_name", "غير معروف")
         
-        msg += f"📦 جهاز: `{cid[:15]}...`\n📊 الحالة: {status}\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+        msg += f"📦 جهاز: `{cid[:15]}...`\n🖥️ التطبيق: `{app_name}`\n📊 الحالة: {status}\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
     bot.send_message(m.chat.id, msg, parse_mode="Markdown")
 
 # --- [ نظام الشراء ] ---
@@ -126,7 +128,7 @@ def pay_success(m):
 @bot.message_handler(func=lambda m: m.text == "نجم1" and m.from_user.id == ADMIN_ID)
 def admin_panel(m):
     db = load_db()
-    active = sum(1 for x in db["app_links"].values() if x.get("end_time", 0) > time.time())
+    active = sum(1 for x in db["app_links"].values() if x.get("end_time", 0) > time.time() and not x.get("banned"))
     msg = (f"👑 **إدارة نجم الإبداع**\n\n"
            f"👥 المستخدمين: `{len(db['users'])}` | ⚡ الأجهزة: `{len(db['app_links'])}`\n"
            f"🟢 نشط حالياً: `{active}`\n"
@@ -140,7 +142,8 @@ def admin_panel(m):
         types.InlineKeyboardButton("💰 تعديل السعر", callback_data="adm_price"),
         types.InlineKeyboardButton("🚫 حظر/فك", callback_data="adm_ban"),
         types.InlineKeyboardButton("📊 عرض الأجهزة", callback_data="adm_list"),
-        types.InlineKeyboardButton("📩 إذاعة عامة", callback_data="adm_bc")
+        types.InlineKeyboardButton("📩 إذاعة عامة", callback_data="adm_bc"),
+        types.InlineKeyboardButton("📈 إحصائيات", callback_data="adm_stats")
     )
     bot.send_message(m.chat.id, msg, reply_markup=markup, parse_mode="Markdown")
 
@@ -160,16 +163,43 @@ def admin_actions(q):
         msg = bot.send_message(q.message.chat.id, "أدخل السعر الجديد بالنجوم:")
         bot.register_next_step_handler(msg, process_set_price)
     
+    elif q.data == "adm_ban":
+        msg = bot.send_message(q.message.chat.id, "أرسل ID الجهاز (cid) ثم 'ban' أو 'unban' مفصولة بمسافة (مثال: abc123 ban):")
+        bot.register_next_step_handler(msg, process_ban_unban)
+    
     elif q.data == "adm_list":
         db = load_db()
-        txt = "📋 **قائمة الأجهزة:**\n"
-        for k, v in list(db["app_links"].items())[-10:]: # آخر 10
-            txt += f"🔹 `{k[:10]}...` -> {'✅' if v['end_time'] > time.time() else '❌'}\n"
+        txt = "📋 **قائمة الأجهزة (آخر 10):**\n"
+        for k, v in list(db["app_links"].items())[-10:]:
+            user_id = v.get("telegram_id", "غير مرتبط")
+            try:
+                user_info = bot.get_chat(user_id)
+                user_name = f"{user_info.first_name} (@{user_info.username})" if user_info.username else user_info.first_name
+            except:
+                user_name = "غير معروف"
+            app_name = v.get("app_name", "غير معروف")
+            status = '✅' if v.get('end_time', 0) > time.time() and not v.get('banned') else '❌' if not v.get('banned') else '🚫'
+            txt += f"🔹 جهاز: `{k}`\n👤 مستخدم: `{user_name}` (ID: `{user_id}`)\n🖥️ تطبيق: `{app_name}`\n📊 حالة: {status}\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
         bot.send_message(q.message.chat.id, txt, parse_mode="Markdown")
 
     elif q.data == "adm_bc":
         msg = bot.send_message(q.message.chat.id, "أرسل نص الإذاعة للجميع:")
         bot.register_next_step_handler(msg, process_broadcast)
+    
+    elif q.data == "adm_stats":
+        db = load_db()
+        active = sum(1 for x in db["app_links"].values() if x.get("end_time", 0) > time.time() and not x.get("banned"))
+        banned = sum(1 for x in db["app_links"].values() if x.get("banned"))
+        trials_used = sum(1 for x in db["app_links"].values() if x.get("trial_used"))
+        unique_users = len(set(v.get("telegram_id") for v in db["app_links"].values() if v.get("telegram_id")))
+        txt = (f"📈 **إحصائيات مفصلة:**\n\n"
+               f"👥 مستخدمون فريدون: `{unique_users}`\n"
+               f"⚡ أجهزة إجمالية: `{len(db['app_links'])}`\n"
+               f"🟢 أجهزة نشطة: `{active}`\n"
+               f"🚫 أجهزة محظورة: `{banned}`\n"
+               f"🎁 تجارب مستخدمة: `{trials_used}`\n"
+               f"💰 إجمالي الدخل: `{db['stats'].get('total_revenue', 0)}` نجمة")
+        bot.send_message(q.message.chat.id, txt, parse_mode="Markdown")
 
 # --- [ وظائف المعالجة للإدارة ] ---
 
@@ -198,6 +228,27 @@ def process_broadcast(m):
         except: pass
     bot.send_message(m.chat.id, f"✅ تم الإرسال لـ {count} مستخدم.")
 
+def process_ban_unban(m):
+    try:
+        parts = m.text.strip().split()
+        if len(parts) != 2: raise ValueError
+        cid, action = parts
+        db = load_db()
+        if cid not in db["app_links"]: 
+            bot.send_message(m.chat.id, "❌ الجهاز غير موجود.")
+            return
+        if action.lower() == "ban":
+            db["app_links"][cid]["banned"] = True
+            bot.send_message(m.chat.id, f"✅ تم حظر الجهاز `{cid}`.")
+        elif action.lower() == "unban":
+            db["app_links"][cid]["banned"] = False
+            bot.send_message(m.chat.id, f"✅ تم فك حظر الجهاز `{cid}`.")
+        else:
+            raise ValueError
+        save_db(db)
+    except:
+        bot.send_message(m.chat.id, "❌ خطأ: استخدم الصيغة الصحيحة (cid ban/unban).")
+
 # --- [ ميزات المستخدم: تفعيل وتجربة ] ---
 @bot.message_handler(func=lambda m: m.text == "🎫 تفعيل كود")
 def redeem_ui(m):
@@ -219,11 +270,11 @@ def redeem_logic(m):
 def trial_logic(m):
     db = load_db(); cid = db["users"].get(str(m.from_user.id), {}).get("current_app")
     if not cid: return bot.send_message(m.chat.id, "❌ اربط التطبيق أولاً.")
-    if db["app_links"][cid].get("trial_used"): bot.send_message(m.chat.id, "❌ استخدمت التجربة سابقاً.")
+    if db["app_links"][cid].get("trial_used"): bot.send_message(m.chat.id, "❌ استخدمت التجربة سابقاً لهذا التطبيق.")
     else:
-        hours = db["settings"].get("trial_hours", 2)
-        db["app_links"][cid].update({"trial_used": True, "end_time": time.time() + (hours * 3600)})
-        save_db(db); bot.send_message(m.chat.id, f"✅ تم تفعيل {hours} ساعات تجربة مجانية!")
+        days = db["settings"].get("trial_days", 2)
+        db["app_links"][cid].update({"trial_used": True, "end_time": time.time() + (days * 86400)})
+        save_db(db); bot.send_message(m.chat.id, f"✅ تم تفعيل {days} أيام تجربة مجانية!")
 
 # --- [ تشغيل ] ---
 if __name__ == "__main__":
