@@ -1,4 +1,3 @@
-neonize-bin
 PyTelegramBotAPI
 flask
 flask-cors
@@ -7,4 +6,3 @@ google-generativeai
 requests
 pycryptodome
 firebase-admin
-
