@@ -301,8 +301,9 @@ def trial_select_app(m, selected_cid):
     if time.time() - data.get("trial_last_time", 0) < 86400:
         return bot.send_message(m.chat.id, "❌ التجربة متاحة مرة كل 24 ساعة.")
     data["trial_last_time"] = time.time()
-    data["end_time"] = max(time.time(), data.get("end_time", 0)) + 10800
-    save_db(db); bot.send_message(m.chat.id, "✅ تم تفعيل 3 ساعات تجربة!") 
+    # تم تغيير المدة هنا لتصبح 3 أيام (259200 ثانية)
+    data["end_time"] = max(time.time(), data.get("end_time", 0)) + 259200
+    save_db(db); bot.send_message(m.chat.id, "✅ تم تفعيل 3 أيام تجربة!") 
 
 def send_payment(m):
     db = load_db()
