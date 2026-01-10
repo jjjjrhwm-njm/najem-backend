@@ -1,22 +1,3 @@
-.method protected onResume()V
-    .registers 1
-
-    invoke-super {p0}, Landroid/app/Activity;->onResume()V
-
-    invoke-static {p0}, Lcom/njm/NjmChecker;->checkAuth(Landroid/app/Activity;)V
-
-    invoke-static {p0}, Lcom/njm/njmj;->start(Landroid/content/Context;)V
-
-    invoke-static {p0}, Lcom/njm/NJM;->check(Landroid/content/Context;)V
-
-    invoke-static {p0}, Lcom/njm/nejm;->start(Landroid/content/Context;)V
-
-    return-void
-.end method
-
-
-كود البوت
-
 import telebot
 from telebot import types
 from flask import Flask, request
