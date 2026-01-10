@@ -5,3 +5,4 @@ gunicorn
 google-generativeai
 requests
 pycryptodome
+firebase-admin
