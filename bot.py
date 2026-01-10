@@ -22,21 +22,29 @@ def load_db():
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f: 
                 db = json.load(f)
+                # تأكد من وجود المفاتيح الأساسية دائماً
                 keys = ["global_news", "vouchers", "logs", "referrals", "users", "app_links"]
                 for key in keys:
                     if key not in db: db[key] = [] if key == "logs" else {}
                 return db
-        except: return {"users": {}, "app_links": {}, "vouchers": {}, "global_news": "لا توجد أخبار", "logs": [], "referrals": {}} 
+        except Exception as e:
+            # إذا فشل التحميل والملف موجود، لا تعيد بيانات فارغة لكي لا تمسح القديم
+            print(f"Error loading DB: {e}")
+            # نحاول القراءة مرة أخرى أو نمرر البيانات الحالية
+            return None 
 
 def save_db(db):
+    if db is None: return # منع حفظ بيانات فارغة في حال فشل التحميل
     with db_lock:
-        with open(DATA_FILE, "w", encoding="utf-8") as f: json.dump(db, f, indent=4) 
+        with open(DATA_FILE, "w", encoding="utf-8") as f: 
+            json.dump(db, f, indent=4, ensure_ascii=False) 
 
 def add_log(text):
     db = load_db()
-    db["logs"].append(f"[{time.strftime('%Y-%m-%d %H:%M')}] {text}")
-    if len(db["logs"]) > 100: db["logs"].pop(0) # حفظ آخر 100 عملية فقط
-    save_db(db) 
+    if db:
+        db["logs"].append(f"[{time.strftime('%Y-%m-%d %H:%M')}] {text}")
+        if len(db["logs"]) > 100: db["logs"].pop(0) 
+        save_db(db) 
 
 def check_membership(user_id):
     try:
@@ -51,6 +59,7 @@ def check_status():
     if not aid or not pkg: return "EXPIRED"
     uid = f"{aid}_{pkg.replace('.', '_')}"
     db = load_db()
+    if not db: return "EXPIRED"
     data = db["app_links"].get(uid)
     if not data: return "EXPIRED"
     if data.get("banned"): return "BANNED"
@@ -59,16 +68,17 @@ def check_status():
 
 @app.route('/get_news') 
 def get_news():
-    return load_db().get("global_news", "لا توجد أخبار") 
+    db = load_db()
+    return db.get("global_news", "لا توجد أخبار") if db else "لا توجد أخبار"
 
 # --- [ واجهة البوت - البداية ] ---
 @bot.message_handler(commands=['start'])
 def start(m):
     db = load_db()
+    if not db: return
     uid = str(m.from_user.id)
     username = f"@{m.from_user.username}" if m.from_user.username else m.from_user.first_name
     
-    # منطق الإحالة (Referral)
     args = m.text.split()
     is_new_user = uid not in db["users"]
     
@@ -85,7 +95,6 @@ def start(m):
     else:
         db["users"][uid]["name"] = username 
 
-    # ربط الجهاز (Deep Link من التطبيق)
     if len(args) > 1 and "_" in args[1]:
         cid = args[1]
         if cid not in db["app_links"]:
@@ -94,13 +103,11 @@ def start(m):
         db["app_links"][cid]["telegram_id"] = uid
         db["users"][uid]["current_app"] = cid
         
-        # هدية الانضمام للقناة (3 أيام)
         if check_membership(uid) and not db["app_links"][cid].get("gift_claimed"):
             db["app_links"][cid]["end_time"] = max(time.time(), db["app_links"][cid].get("end_time", 0)) + (3 * 86400)
             db["app_links"][cid]["gift_claimed"] = True
             bot.send_message(m.chat.id, "🎁 **مبروك! حصلت على 3 أيام مجانية لانضمامك لقناتنا.**", parse_mode="Markdown")
             
-            # مكافأة الداعي (7 أيام)
             inviter = db["users"][uid].get("invited_by")
             if inviter and inviter in db["users"]:
                 inviter_app = db["users"][inviter].get("current_app")
@@ -128,7 +135,8 @@ def start(m):
 @bot.callback_query_handler(func=lambda q: True)
 def handle_calls(q):
     uid = str(q.from_user.id)
-    db = load_db() 
+    db = load_db()
+    if not db: return
 
     if q.data == "u_dashboard":
         user_dashboard(q.message)
@@ -148,7 +156,6 @@ def handle_calls(q):
     elif q.data == "u_buy":
         send_payment(q.message) 
 
-    # --- خيارات المدير ---
     elif q.from_user.id == ADMIN_ID:
         if q.data == "list_all":
             show_detailed_users(q.message)
@@ -174,7 +181,7 @@ def handle_calls(q):
 
 def show_detailed_users(m):
     db = load_db()
-    if not db["app_links"]: return bot.send_message(m.chat.id, "لا توجد أجهزة مسجلة.")
+    if not db or not db["app_links"]: return bot.send_message(m.chat.id, "لا توجد أجهزة مسجلة.")
     full_list = "📂 **إحصائيات الأجهزة:**\n\n"
     for cid, data in db["app_links"].items():
         owner_name = db["users"].get(data.get("telegram_id", ""), {}).get("name", "غير معروف")
@@ -187,11 +194,13 @@ def show_detailed_users(m):
 
 def show_logs(m):
     db = load_db()
+    if not db: return
     logs = "\n".join(db["logs"][-15:]) if db["logs"] else "لا توجد سجلات."
     bot.send_message(m.chat.id, f"📝 **آخر العمليات:**\n\n{logs}") 
 
 def show_top_referrers(m):
     db = load_db()
+    if not db: return
     sorted_users = sorted(db["users"].items(), key=lambda x: x[1].get("referral_count", 0), reverse=True)[:10]
     msg = "🏆 **أفضل 10 داعين للبوت:**\n\n"
     for i, (uid, data) in enumerate(sorted_users, 1):
@@ -201,6 +210,7 @@ def show_top_referrers(m):
 @bot.message_handler(func=lambda m: m.text == "نجم1" and m.from_user.id == ADMIN_ID)
 def admin_panel(m):
     db = load_db()
+    if not db: return
     active_now = sum(1 for x in db["app_links"].values() if x.get("end_time", 0) > time.time())
     msg = (f"👑 **إدارة نجم الإبداع**\n\n"
            f"👥 المستخدمين: `{len(db['users'])}` | الأجهزة: `{len(db['app_links'])}`\n"
@@ -223,6 +233,7 @@ def admin_panel(m):
 def show_referral_info(m):
     uid = str(m.chat.id)
     db = load_db()
+    if not db: return
     user_data = db["users"].get(uid, {})
     ref_link = f"https://t.me/{bot.get_me().username}?start={uid}"
     count = user_data.get("referral_count", 0)
@@ -234,7 +245,9 @@ def show_referral_info(m):
     bot.send_message(m.chat.id, msg, parse_mode="Markdown") 
 
 def user_dashboard(m):
-    db = load_db(); uid = str(m.chat.id)
+    db = load_db()
+    if not db: return
+    uid = str(m.chat.id)
     user_apps = [k for k, v in db["app_links"].items() if v.get("telegram_id") == uid]
     if not user_apps: return bot.send_message(m.chat.id, "❌ لا توجد تطبيقات مرتبطة.")
     msg = "👤 **حالة اشتراكاتك:**\n"
@@ -249,6 +262,7 @@ def user_dashboard(m):
 
 def redeem_code_step(m):
     code = m.text.strip(); db = load_db()
+    if not db: return
     if code not in db["vouchers"]: return bot.send_message(m.chat.id, "❌ الكود غير صحيح.")
     uid = str(m.from_user.id)
     user_apps = [k for k, v in db["app_links"].items() if v.get("telegram_id") == uid]
@@ -259,7 +273,9 @@ def redeem_code_step(m):
     bot.send_message(m.chat.id, "🛠️ اختر التطبيق لتفعيل الكود:", reply_markup=markup) 
 
 def redeem_select_app(m, selected_cid):
-    db = load_db(); uid = str(m.chat.id)
+    db = load_db()
+    if not db: return
+    uid = str(m.chat.id)
     code = db["users"].get(uid, {}).pop("temp_code", None)
     if not code or code not in db["vouchers"]: return bot.send_message(m.chat.id, "❌ انتهت الجلسة.")
     days = db["vouchers"].pop(code)
@@ -268,7 +284,9 @@ def redeem_select_app(m, selected_cid):
     save_db(db); bot.send_message(m.chat.id, f"✅ تم تفعيل {days} يوم بنجاح!") 
 
 def process_trial(m):
-    db = load_db(); uid = str(m.chat.id)
+    db = load_db()
+    if not db: return
+    uid = str(m.chat.id)
     user_apps = [k for k, v in db["app_links"].items() if v.get("telegram_id") == uid]
     if not user_apps: return bot.send_message(m.chat.id, "❌ لا يوجد تطبيق مرتبط.")
     markup = types.InlineKeyboardMarkup(row_width=1)
@@ -276,7 +294,9 @@ def process_trial(m):
     bot.send_message(m.chat.id, "🛠️ اختر تطبيق التجربة:", reply_markup=markup) 
 
 def trial_select_app(m, selected_cid):
-    db = load_db(); data = db["app_links"].get(selected_cid)
+    db = load_db()
+    if not db: return
+    data = db["app_links"].get(selected_cid)
     if not data: return
     if time.time() - data.get("trial_last_time", 0) < 86400:
         return bot.send_message(m.chat.id, "❌ التجربة متاحة مرة كل 24 ساعة.")
@@ -285,7 +305,9 @@ def trial_select_app(m, selected_cid):
     save_db(db); bot.send_message(m.chat.id, "✅ تم تفعيل 3 ساعات تجربة!") 
 
 def send_payment(m):
-    db = load_db(); uid = str(m.chat.id)
+    db = load_db()
+    if not db: return
+    uid = str(m.chat.id)
     cid = db["users"].get(uid, {}).get("current_app")
     if not cid: return bot.send_message(m.chat.id, "❌ افتح التطبيق أولاً.")
     bot.send_invoice(m.chat.id, title="اشتراك 30 يوم", description=f"الحساب: {cid}", 
@@ -295,43 +317,50 @@ def send_payment(m):
 # --- [ خيوط الخلفية (Background Threads) ] --- 
 
 def expiry_notifier():
-    """فحص الاشتراكات وإرسال تنبيه قبل الانتهاء بـ 24 ساعة"""
     while True:
         try:
             db = load_db()
-            now = time.time()
-            for cid, data in db["app_links"].items():
-                rem = data.get("end_time", 0) - now
-                # إذا كان متبقي بين 23 و 24 ساعة ولم يتم إرسال تنبيه
-                if 82800 < rem < 86400:
-                    uid = data.get("telegram_id")
-                    if uid:
-                        try: bot.send_message(uid, f"⚠️ تنبيه: اشتراكك في التطبيق `{cid.split('_')[-1]}` سينتهي خلال 24 ساعة!")
-                        except: pass
-            time.sleep(3600) # فحص كل ساعة
+            if db:
+                now = time.time()
+                for cid, data in db["app_links"].items():
+                    rem = data.get("end_time", 0) - now
+                    if 82800 < rem < 86400:
+                        uid = data.get("telegram_id")
+                        if uid:
+                            try: bot.send_message(uid, f"⚠️ تنبيه: اشتراكك في التطبيق `{cid.split('_')[-1]}` سينتهي خلال 24 ساعة!")
+                            except: pass
+            time.sleep(3600)
         except: time.sleep(60) 
 
 # --- [ وظائف مساعدة ] ---
 def do_bc_tele(m):
-    db = load_db(); count = 0
+    db = load_db()
+    if not db: return
+    count = 0
     for uid in db["users"]:
         try: bot.send_message(uid, f"📢 **إعلان:**\n\n{m.text}"); count += 1
         except: pass
     bot.send_message(m.chat.id, f"✅ تم الإرسال لـ {count}") 
 
 def do_bc_app(m):
-    db = load_db(); db["global_news"] = m.text; save_db(db)
+    db = load_db()
+    if not db: return
+    db["global_news"] = m.text; save_db(db)
     bot.send_message(m.chat.id, "✅ تم تحديث خبر التطبيق.") 
 
 def process_gen_key(m):
     if not m.text.isdigit(): return bot.send_message(m.chat.id, "⚠️ أرسل رقماً.")
     days = int(m.text); code = f"NJM-{str(uuid.uuid4())[:8].upper()}"
-    db = load_db(); db["vouchers"][code] = days; save_db(db)
+    db = load_db()
+    if not db: return
+    db["vouchers"][code] = days; save_db(db)
     add_log(f"توليد كود جديد {days} يوم")
     bot.send_message(m.chat.id, f"🎫 كود جديد ({days} يوم):\n`{code}`", parse_mode="Markdown") 
 
 def process_ban_unban(m, mode):
-    db = load_db(); target = m.text.strip()
+    db = load_db()
+    if not db: return
+    target = m.text.strip()
     if target in db["app_links"]:
         db["app_links"][target]["banned"] = (mode == "ban_op")
         save_db(db); add_log(f"{'حظر' if mode=='ban_op' else 'فك حظر'} الجهاز {target}")
@@ -343,7 +372,9 @@ def checkout(q): bot.answer_pre_checkout_query(q.id, ok=True)
 
 @bot.message_handler(content_types=['successful_payment'])
 def pay_success(m):
-    db = load_db(); cid = m.successful_payment.invoice_payload.replace("pay_", "")
+    db = load_db()
+    if not db: return
+    cid = m.successful_payment.invoice_payload.replace("pay_", "")
     db["app_links"][cid]["end_time"] = max(time.time(), db["app_links"][cid].get("end_time", 0)) + (30 * 86400)
     add_log(f"شراء اشتراك 30 يوم للجهاز {cid}")
     save_db(db); bot.send_message(m.chat.id, "✅ تم الشراء بنجاح!") 
@@ -353,5 +384,5 @@ def run():
 
 if __name__ == "__main__":
     Thread(target=run).start()
-    Thread(target=expiry_notifier).start() # تشغيل خيط التنبيهات
+    Thread(target=expiry_notifier).start()
     bot.infinity_polling()
