@@ -217,8 +217,18 @@ def handle_calls(q):
             action = "لحظره" if q.data == "ban_op" else "لفك حظره"
             msg = bot.send_message(q.message.chat.id, f"ارسل المعرف {action}:")
             bot.register_next_step_handler(msg, process_ban_unban, q.data) 
+        # --- [ ميزة الحذف الجديدة ] ---
+        elif q.data == "wipe_ask":
+            mk = types.InlineKeyboardMarkup()
+            mk.add(types.InlineKeyboardButton("⚠️ نعم، احذف كل شيء فوراً", callback_data="wipe_final"))
+            mk.add(types.InlineKeyboardButton("❌ تراجع", callback_data="list_all"))
+            bot.edit_message_text("❗ **تحذير:** سيتم حذف كافة المستخدمين والأجهزة المرتبطة والأكواد والسجلات. هل أنت متأكد؟", q.message.chat.id, q.message.message_id, reply_markup=mk, parse_mode="Markdown")
+        elif q.data == "wipe_final":
+            wipe_all_data()
+            bot.answer_callback_query(q.id, "✅ تم تصفير قاعدة البيانات بنجاح")
+            bot.send_message(q.message.chat.id, "🧨 **تم حذف جميع البيانات بنجاح.**\nالبوت الآن جاهز للبدء من جديد.")
 
-# --- [ وظائف الإدارة - تم إصلاح "المشتركين" و "السجلات" هنا ] --- 
+# --- [ وظائف الإدارة ] --- 
 
 def show_detailed_users(m):
     try:
@@ -232,26 +242,22 @@ def show_detailed_users(m):
             owner_name = owner_data.get("name", "غير معروف") if owner_data else "غير معروف"
             rem_time = data.get("end_time", 0) - time.time()
             stat = "🔴 محظور" if data.get("banned") else (f"🟢 {int(rem_time/86400)} يوم" if rem_time > 0 else "⚪ منتهي")
-            
-            # تم استخدام HTML لتجنب أخطاء الرموز الخاصة في المعرفات
             full_list += f"👤: {owner_name} | {stat}\n🆔: <code>{cid}</code>\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-            
             if len(full_list) > 3000:
                 bot.send_message(m.chat.id, full_list, parse_mode="HTML")
                 full_list = ""
         if full_list: bot.send_message(m.chat.id, full_list, parse_mode="HTML")
     except Exception as e:
-        bot.send_message(m.chat.id, f"❌ حدث خطأ في جلب البيانات: {str(e)}")
+        bot.send_message(m.chat.id, f"❌ حدث خطأ: {str(e)}")
 
 def show_logs(m):
     try:
         logs_ref = db_fs.collection("logs").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(15).get()
         logs_list = [doc.to_dict().get("text") for doc in logs_ref]
         logs_text = "\n".join(logs_list) if logs_list else "لا توجد سجلات."
-        # استخدام HTML لضمان عدم توقف الزر عند وجود رموز خاصة في السجلات
         bot.send_message(m.chat.id, f"📝 <b>آخر العمليات:</b>\n\n{logs_text}", parse_mode="HTML")
     except Exception as e:
-        bot.send_message(m.chat.id, f"❌ حدث خطأ في السجلات: {str(e)}")
+        bot.send_message(m.chat.id, f"❌ خطأ بالسجلات: {str(e)}")
 
 def show_top_referrers(m):
     users_ref = db_fs.collection("users").order_by("referral_count", direction=firestore.Query.DESCENDING).limit(10).get()
@@ -259,7 +265,7 @@ def show_top_referrers(m):
     for i, doc in enumerate(users_ref, 1):
         data = doc.to_dict()
         msg += f"{i}- {data.get('name', 'User')} ⮕ `{data.get('referral_count', 0)}` إحالة\n"
-    bot.send_message(m.chat.id, msg, parse_mode="Markdown") 
+    bot.send_message(m.chat.id, msg) 
 
 def admin_panel(m):
     users_count = len(db_fs.collection("users").get())
@@ -279,7 +285,8 @@ def admin_panel(m):
         types.InlineKeyboardButton("🚫 حظر", callback_data="ban_op"),
         types.InlineKeyboardButton("✅ فك حظر", callback_data="unban_op"),
         types.InlineKeyboardButton("📢 إعلان التطبيق", callback_data="bc_app"),
-        types.InlineKeyboardButton("📢 إعلان تلجرام", callback_data="bc_tele")
+        types.InlineKeyboardButton("📢 إعلان تلجرام", callback_data="bc_tele"),
+        types.InlineKeyboardButton("🧨 تصفير البيانات", callback_data="wipe_ask") # الزر الجديد
     )
     bot.send_message(m.chat.id, msg, reply_markup=markup, parse_mode="Markdown") 
 
@@ -426,6 +433,14 @@ def process_ban_unban(m, mode):
         add_log(f"{'حظر' if mode=='ban_op' else 'فك حظر'} الجهاز {target}")
         bot.send_message(m.chat.id, "✅ تمت العملية.")
     else: bot.send_message(m.chat.id, "❌ المعرف غير موجود.") 
+
+def wipe_all_data():
+    """وظيفة لحذف كافة البيانات من قاعدة البيانات"""
+    collections = ["users", "app_links", "vouchers", "logs"]
+    for coll in collections:
+        docs = db_fs.collection(coll).get()
+        for doc in docs:
+            doc.reference.delete()
 
 @bot.pre_checkout_query_handler(func=lambda q: True)
 def checkout(q): bot.answer_pre_checkout_query(q.id, ok=True) 
