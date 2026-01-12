@@ -25,6 +25,12 @@ db_fs = firestore.client()
 bot = telebot.TeleBot(API_TOKEN)
 app = Flask(__name__)
 
+# --- [ واجهة الويب الإضافية لحل مشكلة الكرون ] ---
+
+@app.route('/')
+def home():
+    return "Bot is Running Successfully!", 200
+
 # --- [ إدارة قاعدة البيانات باستخدام Firestore ] ---
 
 def get_user(uid):
@@ -213,9 +219,8 @@ def handle_calls(q):
             msg = bot.send_message(q.message.chat.id, "ارسل المعرف:")
             bot.register_next_step_handler(msg, process_ban_unban, q.data) 
 
-# --- [ وظائف الإدارة المصلحة ] --- 
+# --- [ وظائف الإدارة ] --- 
 def show_detailed_users(m):
-    # استخدام stream() لتفادي مشاكل الذاكرة والتعليق
     links = db_fs.collection("app_links").stream()
     full_list = "📂 **إحصائيات الأجهزة:**\n\n"
     found = False
@@ -233,7 +238,6 @@ def show_detailed_users(m):
     if full_list: bot.send_message(m.chat.id, full_list, parse_mode="Markdown") 
 
 def show_logs(m):
-    # جلب السجلات بشكل مستقر
     logs_ref = db_fs.collection("logs").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(20).stream()
     logs_list = [d.to_dict().get("text") for d in logs_ref]
     text = "\n".join(logs_list) if logs_list else "لا توجد سجلات."
@@ -253,7 +257,6 @@ def confirm_reset(m):
     bot.send_message(m.chat.id, "❗ **تحذير:** سيتم حذف جميع (الأكواد، السجلات، واشتراكات الأجهزة) نهائياً. هل أنت متأكد؟", reply_markup=markup)
 
 def do_full_reset(m):
-    # تصفير الأكواد، الأجهزة، والسجلات
     collections = ["vouchers", "app_links", "logs"]
     for coll in collections:
         docs = db_fs.collection(coll).list_documents()
