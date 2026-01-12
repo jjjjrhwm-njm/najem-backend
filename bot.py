@@ -216,17 +216,11 @@ def handle_calls(q):
         elif q.data in ["ban_op", "unban_op"]:
             action = "لحظره" if q.data == "ban_op" else "لفك حظره"
             msg = bot.send_message(q.message.chat.id, f"ارسل المعرف {action}:")
-            bot.register_next_step_handler(msg, process_ban_unban, q.data) 
-        # --- [ ميزة الحذف الجديدة ] ---
-        elif q.data == "wipe_ask":
-            mk = types.InlineKeyboardMarkup()
-            mk.add(types.InlineKeyboardButton("⚠️ نعم، احذف كل شيء فوراً", callback_data="wipe_final"))
-            mk.add(types.InlineKeyboardButton("❌ تراجع", callback_data="list_all"))
-            bot.edit_message_text("❗ **تحذير:** سيتم حذف كافة المستخدمين والأجهزة المرتبطة والأكواد والسجلات. هل أنت متأكد؟", q.message.chat.id, q.message.message_id, reply_markup=mk, parse_mode="Markdown")
-        elif q.data == "wipe_final":
-            wipe_all_data()
-            bot.answer_callback_query(q.id, "✅ تم تصفير قاعدة البيانات بنجاح")
-            bot.send_message(q.message.chat.id, "🧨 **تم حذف جميع البيانات بنجاح.**\nالبوت الآن جاهز للبدء من جديد.")
+            bot.register_next_step_handler(msg, process_ban_unban, q.data)
+        elif q.data == "reset_data":
+            confirm_reset_data(q.message)
+        elif q.data == "confirm_reset_final":
+            perform_reset_data(q.message)
 
 # --- [ وظائف الإدارة ] --- 
 
@@ -234,7 +228,7 @@ def show_detailed_users(m):
     try:
         links = db_fs.collection("app_links").get()
         if not links: return bot.send_message(m.chat.id, "لا توجد أجهزة مسجلة.")
-        full_list = "📂 <b>إحصائيات الأجهزة:</b>\n\n"
+        full_list = "📂 **إحصائيات الأجهزة:**\n\n"
         for doc in links:
             cid = doc.id
             data = doc.to_dict()
@@ -242,22 +236,31 @@ def show_detailed_users(m):
             owner_name = owner_data.get("name", "غير معروف") if owner_data else "غير معروف"
             rem_time = data.get("end_time", 0) - time.time()
             stat = "🔴 محظور" if data.get("banned") else (f"🟢 {int(rem_time/86400)} يوم" if rem_time > 0 else "⚪ منتهي")
-            full_list += f"👤: {owner_name} | {stat}\n🆔: <code>{cid}</code>\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+            
+            # تنظيف المعرفات من الرموز التي قد تعطل المارك داون
+            clean_cid = cid.replace("_", "\\_")
+            full_list += f"👤: {owner_name} | {stat}\n🆔: `{clean_cid}`\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+            
             if len(full_list) > 3000:
-                bot.send_message(m.chat.id, full_list, parse_mode="HTML")
+                bot.send_message(m.chat.id, full_list, parse_mode="Markdown")
                 full_list = ""
-        if full_list: bot.send_message(m.chat.id, full_list, parse_mode="HTML")
+        if full_list: bot.send_message(m.chat.id, full_list, parse_mode="Markdown")
     except Exception as e:
-        bot.send_message(m.chat.id, f"❌ حدث خطأ: {str(e)}")
+        bot.send_message(m.chat.id, f"❌ حدث خطأ أثناء جلب البيانات: {str(e)}")
 
 def show_logs(m):
     try:
-        logs_ref = db_fs.collection("logs").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(15).get()
+        # محاولة الجلب مع الترتيب، إذا فشل (بسبب الفهرس) يجلب بدون ترتيب
+        try:
+            logs_ref = db_fs.collection("logs").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(15).get()
+        except:
+            logs_ref = db_fs.collection("logs").limit(15).get()
+            
         logs_list = [doc.to_dict().get("text") for doc in logs_ref]
         logs_text = "\n".join(logs_list) if logs_list else "لا توجد سجلات."
-        bot.send_message(m.chat.id, f"📝 <b>آخر العمليات:</b>\n\n{logs_text}", parse_mode="HTML")
+        bot.send_message(m.chat.id, f"📝 **آخر العمليات:**\n\n{logs_text}")
     except Exception as e:
-        bot.send_message(m.chat.id, f"❌ خطأ بالسجلات: {str(e)}")
+        bot.send_message(m.chat.id, "❌ خطأ في جلب السجلات.")
 
 def show_top_referrers(m):
     users_ref = db_fs.collection("users").order_by("referral_count", direction=firestore.Query.DESCENDING).limit(10).get()
@@ -286,9 +289,27 @@ def admin_panel(m):
         types.InlineKeyboardButton("✅ فك حظر", callback_data="unban_op"),
         types.InlineKeyboardButton("📢 إعلان التطبيق", callback_data="bc_app"),
         types.InlineKeyboardButton("📢 إعلان تلجرام", callback_data="bc_tele"),
-        types.InlineKeyboardButton("🧨 تصفير البيانات", callback_data="wipe_ask") # الزر الجديد
+        types.InlineKeyboardButton("🗑️ تصفير البيانات", callback_data="reset_data")
     )
     bot.send_message(m.chat.id, msg, reply_markup=markup, parse_mode="Markdown") 
+
+# --- [ وظائف التصفير الجديدة ] ---
+def confirm_reset_data(m):
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("⚠️ نعم، حذف السجلات والأكواد", callback_data="confirm_reset_final"))
+    markup.add(types.InlineKeyboardButton("❌ إلغاء", callback_data="admin_back"))
+    bot.send_message(m.chat.id, "❗ **هل أنت متأكد؟**\nسيتم حذف جميع السجلات والأكواد غير المستخدمة فقط (لن يتم حذف المشتركين).", reply_markup=markup, parse_mode="Markdown")
+
+def perform_reset_data(m):
+    # تصفير السجلات
+    logs = db_fs.collection("logs").get()
+    for doc in logs: doc.reference.delete()
+    # تصفير الأكواد
+    vouchers = db_fs.collection("vouchers").get()
+    for doc in vouchers: doc.reference.delete()
+    
+    add_log("قام الأدمن بتصفير السجلات والأكواد")
+    bot.send_message(m.chat.id, "✅ تم تصفير السجلات والأكواد بنجاح.")
 
 # --- [ منطق المستخدم ] --- 
 
@@ -433,14 +454,6 @@ def process_ban_unban(m, mode):
         add_log(f"{'حظر' if mode=='ban_op' else 'فك حظر'} الجهاز {target}")
         bot.send_message(m.chat.id, "✅ تمت العملية.")
     else: bot.send_message(m.chat.id, "❌ المعرف غير موجود.") 
-
-def wipe_all_data():
-    """وظيفة لحذف كافة البيانات من قاعدة البيانات"""
-    collections = ["users", "app_links", "vouchers", "logs"]
-    for coll in collections:
-        docs = db_fs.collection(coll).get()
-        for doc in docs:
-            doc.reference.delete()
 
 @bot.pre_checkout_query_handler(func=lambda q: True)
 def checkout(q): bot.answer_pre_checkout_query(q.id, ok=True) 
