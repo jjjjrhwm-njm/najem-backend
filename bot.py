@@ -7,9 +7,10 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 
 # --- [ الإعدادات الأساسية ] ---
-API_TOKEN = '8322095833:AAEq5gd2R3HiN9agRdX-R995vHXeWx2oT7g'
+# الإعدادات الجديدة لبوت متجر نجم الإبداع
+API_TOKEN = '7521759893:AAEGWIKj17Q4AZ07DLuZXmpa8fus1C9Bnic'
 ADMIN_ID = 7650083401
-CHANNEL_ID = "@jrhwm0njm" 
+CHANNEL_ID = "@jrhwm0njm"
 
 # تهيئة Firebase Firestore
 if not firebase_admin._apps:
