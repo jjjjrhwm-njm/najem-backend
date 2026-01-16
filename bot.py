@@ -102,13 +102,13 @@ def start(m):
     else:
         update_user(uid, {"name": username})
 
-    # التحقق من الأوامر القادمة من التطبيق
+    # --- المنطق الجديد للتعامل مع أوامر التطبيق التلقائية ---
     if len(args) > 1:
         param = args[1]
         action = "LINK" # الافتراضي
-        cid = param
+        cid = ""
 
-        # فك تشفير الأمر (مثلاً: TRIAL_deviceid_pkg)
+        # تحديد الإجراء واستخراج الـ CID (معرف الجهاز والباكيج)
         if param.startswith("TRIAL_"):
             action = "TRIAL"; cid = param.replace("TRIAL_", "")
         elif param.startswith("BUY_"):
@@ -117,43 +117,47 @@ def start(m):
             action = "DASH"; cid = param.replace("DASH_", "")
         elif param.startswith("REDEEM_"):
             action = "REDEEM"; cid = param.replace("REDEEM_", "")
+        else:
+            cid = param # في حالة الربط العادي فقط
 
         if "_" in cid:
+            # ربط الجهاز بالمستخدم أولاً
             link_data = get_app_link(cid) or {"end_time": 0, "banned": False, "trial_last_time": 0, "gift_claimed": False}
             link_data["telegram_id"] = uid
+            update_app_link(cid, link_data)
             update_user(uid, {"current_app": cid})
             
-            # هدية القناة
+            # منح هدية القناة تلقائياً عند أول ربط
             if check_membership(uid) and not link_data.get("gift_claimed"):
                 link_data["end_time"] = max(time.time(), link_data.get("end_time", 0)) + (3 * 86400)
                 link_data["gift_claimed"] = True
-                bot.send_message(m.chat.id, "🎁 حصلت على 3 أيام لجوين القناة!")
+                update_app_link(cid, link_data)
+                bot.send_message(m.chat.id, "🎁 تم منحك 3 أيام هدية لانضمامك للقناة!")
                 
+                # مكافأة الداعي
                 inviter = user_data.get("invited_by")
                 if inviter:
                     inv_data = get_user(inviter)
                     if inv_data and inv_data.get("current_app"):
                         inv_link = get_app_link(inv_data["current_app"])
                         if inv_link:
-                            inv_link["end_time"] = inv_link.get("end_time", 0) + (7 * 86400)
-                            update_app_link(inv_data["current_app"], {"end_time": inv_link["end_time"]})
+                            new_time = max(time.time(), inv_link.get("end_time", 0)) + (7 * 86400)
+                            update_app_link(inv_data["current_app"], {"end_time": new_time})
                             update_user(inviter, {"referral_count": inv_data.get("referral_count", 0) + 1})
-                            try: bot.send_message(inviter, "🎊 حصلت على 7 أيام من دعوة صديق!")
+                            try: bot.send_message(inviter, "🎊 حصلت على 7 أيام إضافية بسبب دعوة صديق!")
                             except: pass
-            
-            update_app_link(cid, link_data)
 
-            # تنفيذ الإجراء التلقائي المطلوب من التطبيق
+            # تنفيذ الطلب القادم من التطبيق بشكل فوري وتلقائي
             if action == "TRIAL":
-                return trial_select_app(m, cid)
+                return trial_select_app(m, cid) # تفعيل التجربة فوراً
             elif action == "BUY":
-                update_user(uid, {"current_app": cid})
-                return send_payment(m)
+                return send_payment(m) # فتح فاتورة الدفع فوراً
             elif action == "DASH":
-                return user_dashboard(m)
+                return user_dashboard(m) # عرض حالة الاشتراك فوراً
             elif action == "REDEEM":
-                msg = bot.send_message(m.chat.id, "🎫 **أرسل كود التفعيل الآن للجهاز المرتبط:**")
-                return bot.register_next_step_handler(msg, redeem_code_step)
+                msg = bot.send_message(m.chat.id, f"🎫 **الجهاز المستهدف:** `{cid.split('_')[-1]}`\n**أرسل كود التفعيل الآن:**")
+                bot.register_next_step_handler(msg, redeem_code_step)
+                return
             else:
                 bot.send_message(m.chat.id, "✅ **تم ربط جهازك بنجاح!**")
                 return user_dashboard(m)
@@ -169,7 +173,7 @@ def show_main_menu(m, username):
         types.InlineKeyboardButton("🎁 تجربة مجانية", callback_data="u_trial"),
         types.InlineKeyboardButton("🛒 شراء اشتراك", callback_data="u_buy")
     )
-    bot.send_message(m.chat.id, f"مرحباً بك يا **{username}** 🌟\nاستخدم القائمة للتحكم:", reply_markup=markup, parse_mode="Markdown")
+    bot.send_message(m.chat.id, f"مرحباً بك يا **{username}** 🌟\nاستخدم القائمة للتحكم أو اطلب من داخل التطبيق:", reply_markup=markup, parse_mode="Markdown")
 
 # --- [ معالجة ضغطات الأزرار ] ---
 @bot.callback_query_handler(func=lambda q: True)
@@ -203,13 +207,12 @@ def handle_calls(q):
             msg = bot.send_message(q.message.chat.id, "ارسل المعرف:")
             bot.register_next_step_handler(msg, process_ban_unban, q.data)
 
-# --- [ وظائف الإدارة - تحسين عرض المشتركين ] --- 
+# --- [ وظائف الإدارة ] --- 
 
 def show_detailed_users(m):
     all_users = db_fs.collection("users").get()
     if not all_users: return bot.send_message(m.chat.id, "لا يوجد مستخدمين.")
     
-    # جلب كافة روابط الأجهزة لتوزيعها على المستخدمين
     all_links = db_fs.collection("app_links").get()
     links_map = {}
     for l in all_links:
@@ -228,10 +231,10 @@ def show_detailed_users(m):
         if not user_apps:
             msg += "└ 🚫 لا توجد تطبيقات مرتبطة\n"
         else:
-            for app in user_apps:
-                rem = app['data'].get("end_time", 0) - time.time()
-                stat = "🔴 محظور" if app['data'].get("banned") else (f"🟢 {int(rem/86400)} يوم" if rem > 0 else "⚪ منتهي")
-                msg += f"└ 📦 `{app['id'].split('_')[-1]}` ⮕ {stat}\n"
+            for app_item in user_apps:
+                rem = app_item['data'].get("end_time", 0) - time.time()
+                stat = "🔴 محظور" if app_item['data'].get("banned") else (f"🟢 {int(rem/86400)} يوم" if rem > 0 else "⚪ منتهي")
+                msg += f"└ 📦 `{app_item['id'].split('_')[-1]}` ⮕ {stat}\n"
         msg += "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
         
         if len(msg) > 3500:
@@ -302,14 +305,28 @@ def redeem_code_step(m):
     days = get_voucher(code)
     if not days: return bot.send_message(m.chat.id, "❌ الكود غير صحيح.")
     uid = str(m.from_user.id)
-    apps = db_fs.collection("app_links").where("telegram_id", "==", uid).get()
-    if not apps: return bot.send_message(m.chat.id, "❌ اربط جهازك أولاً.")
     
-    update_user(uid, {"temp_code": code})
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    for doc in apps:
-        markup.add(types.InlineKeyboardButton(f"📦 {doc.id.split('_')[-1]}", callback_data=f"redeem_select_{doc.id}"))
-    bot.send_message(m.chat.id, "🛠️ اختر التطبيق لتفعيله:", reply_markup=markup) 
+    # محاولة تفعيل الكود للجهاز الحالي المفتوح من التطبيق تلقائياً
+    user_data = get_user(uid)
+    current_cid = user_data.get("current_app")
+    
+    if current_cid:
+        # تنفيذ التفعيل مباشرة دون سؤال
+        link = get_app_link(current_cid)
+        new_time = max(time.time(), link.get("end_time", 0)) + (days * 86400)
+        update_app_link(current_cid, {"end_time": new_time})
+        delete_voucher(code)
+        bot.send_message(m.chat.id, f"✅ تم تفعيل {days} يوم لجهازك بنجاح!")
+        add_log(f"تفعيل كود {days} يوم لـ {user_data.get('name')}")
+    else:
+        # إذا لم يكن هناك جهاز مرتبط حالياً نطلب الاختيار
+        apps = db_fs.collection("app_links").where("telegram_id", "==", uid).get()
+        if not apps: return bot.send_message(m.chat.id, "❌ اربط جهازك أولاً.")
+        update_user(uid, {"temp_code": code})
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        for doc in apps:
+            markup.add(types.InlineKeyboardButton(f"📦 {doc.id.split('_')[-1]}", callback_data=f"redeem_select_{doc.id}"))
+        bot.send_message(m.chat.id, "🛠️ اختر التطبيق لتفعيله:", reply_markup=markup) 
 
 def redeem_select_app(m, cid):
     uid = str(m.chat.id)
@@ -336,18 +353,21 @@ def process_trial(m):
 def trial_select_app(m, cid):
     data = get_app_link(cid)
     if not data: return
+    # التحقق من مرور 24 ساعة
     if time.time() - data.get("trial_last_time", 0) < 86400:
-        return bot.send_message(m.chat.id, "❌ التجربة متاحة كل 24 ساعة.")
+        return bot.send_message(m.chat.id, f"❌ التجربة متاحة كل 24 ساعة لجهازك: `{cid.split('_')[-1]}`")
     
-    update_app_link(cid, {"trial_last_time": time.time(), "end_time": max(time.time(), data.get("end_time", 0)) + 259200})
-    bot.send_message(m.chat.id, "✅ تم تفعيل 3 أيام تجربة للجهاز!") 
+    new_time = max(time.time(), data.get("end_time", 0)) + 259200 # +3 أيام
+    update_app_link(cid, {"trial_last_time": time.time(), "end_time": new_time})
+    bot.send_message(m.chat.id, f"✅ تم تفعيل 3 أيام تجربة للجهاز: `{cid.split('_')[-1]}`") 
 
 def send_payment(m):
     uid = str(m.chat.id)
     user_data = get_user(uid)
     cid = user_data.get("current_app")
     if not cid: return bot.send_message(m.chat.id, "❌ اربط التطبيق أولاً.")
-    bot.send_invoice(m.chat.id, title="اشتراك 30 يوم", description=f"الجهاز: {cid}", 
+    
+    bot.send_invoice(m.chat.id, title="اشتراك 30 يوم", description=f"تفعيل الجهاز: {cid.split('_')[-1]}", 
                      invoice_payload=f"pay_{cid}", provider_token="", currency="XTR",
                      prices=[types.LabeledPrice(label="VIP", amount=100)]) 
 
@@ -401,8 +421,9 @@ def pay_success(m):
     cid = m.successful_payment.invoice_payload.replace("pay_", "")
     link = get_app_link(cid)
     if link:
-        update_app_link(cid, {"end_time": max(time.time(), link.get("end_time", 0)) + (30 * 86400)})
-        bot.send_message(m.chat.id, "✅ تم الشراء بنجاح!") 
+        new_time = max(time.time(), link.get("end_time", 0)) + (30 * 86400)
+        update_app_link(cid, {"end_time": new_time})
+        bot.send_message(m.chat.id, f"✅ تم الشراء بنجاح لجهازك: {cid.split('_')[-1]}") 
 
 def run():
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080))) 
