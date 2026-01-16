@@ -6,10 +6,10 @@ from threading import Thread
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-# --- [ الإعدادات الأساسية - أصبحت سرية الآن ] ---
+# --- [ الإعدادات الأساسية - تم إخفاؤها بناءً على طلبك ] ---
 API_TOKEN = os.getenv('BOT_TOKEN')
-ADMIN_ID = int(os.getenv('ADMIN_ID', 7650083401))
-CHANNEL_ID = os.getenv('CHANNEL_ID', "@jrhwm0njm") 
+ADMIN_ID = int(os.getenv('ADMIN_ID'))
+CHANNEL_ID = os.getenv('CHANNEL_ID')
 
 # تهيئة Firebase Firestore
 if not firebase_admin._apps:
@@ -209,7 +209,7 @@ def handle_calls(q):
             msg = bot.send_message(q.message.chat.id, "ارسل المعرف:")
             bot.register_next_step_handler(msg, process_ban_unban, q.data) 
 
-# --- [ بقية وظائف النطام - تم تعديل دالة المشتركين فقط ] ---
+# --- [ تحسين دالة المشتركين لسهولة الحظر والاسم الحقيقي ] ---
 
 def show_detailed_users(m):
     links = db_fs.collection("app_links").get()
@@ -220,15 +220,15 @@ def show_detailed_users(m):
         data = doc.to_dict()
         t_id = data.get("telegram_id")
         
-        # جلب الاسم الحقيقي من جدول المستخدمين
+        # جلب اسم المستخدم الحقيقي من جدول users
         user_info = get_user(t_id) if t_id else None
-        user_real_name = user_info.get("name", "غير معروف") if user_info else "غير مرتبط"
+        user_name = user_info.get("name", "غير معروف") if user_info else "غير مرتبط"
         
         rem_time = data.get("end_time", 0) - time.time()
         stat = "🔴 محظور" if data.get("banned") else (f"🟢 {int(rem_time/86400)} يوم" if rem_time > 0 else "⚪ منتهي")
         
-        # وضع الـ ID داخل علامة ` ليتم نسخه بلمسة واحدة لضمان دقة الحظر
-        full_list += f"👤: {user_real_name}\n🆔: `{cid}`\n📊: {stat}\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+        # وضع المعرف داخل `` لنسخه بلمسة واحدة
+        full_list += f"👤: {user_name}\n🆔: `{cid}`\n📊: {stat}\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
     bot.send_message(m.chat.id, full_list, parse_mode="Markdown")
 
 def user_dashboard(m):
@@ -343,7 +343,6 @@ def process_ban_unban(m, mode):
     target = m.text.strip()
     if get_app_link(target):
         update_app_link(target, {"banned": (mode == "ban_op")})
-        # تم تعديل رسالة التأكيد لتشمل الـ ID لضمان الدقة
         bot.send_message(m.chat.id, f"✅ تم تنفيذ العملية على الجهاز: `{target}`", parse_mode="Markdown")
 
 @bot.pre_checkout_query_handler(func=lambda q: True)
@@ -363,6 +362,6 @@ def run():
 
 if __name__ == "__main__":
     Thread(target=run).start()
-    # سطر التنظيف المطلوب لضمان عدم حدوث تعارض Webhook
+    # سطر تنظيف الـ Webhook المطلوب
     bot.remove_webhook()
     bot.infinity_polling()
