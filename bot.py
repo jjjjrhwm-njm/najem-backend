@@ -7,7 +7,6 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 
 # --- [ الإعدادات الأساسية - مشفرة عبر راندر ] ---
-# هنا قمنا بربط الكود بالأسماء التي وضعتها في صفحة Environment
 API_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_ID = int(os.getenv('ADMIN_ID', 7650083401))
 CHANNEL_ID = os.getenv('CHANNEL_ID', "@jrhwm0njm") 
@@ -68,7 +67,7 @@ def check_membership(user_id):
         return member.status in ['member', 'administrator', 'creator']
     except: return False 
 
-# --- [ واجهة API - تم التعديل لعرض الرصيد ] ---
+# --- [ واجهة API ] ---
 @app.route('/check')
 def check_status():
     aid, pkg = request.args.get('aid'), request.args.get('pkg')
@@ -81,7 +80,6 @@ def check_status():
     rem_time = data.get("end_time", 0) - time.time()
     if rem_time <= 0: return "EXPIRED"
     
-    # إرسال الحالة مع عدد الأيام المتبقية ليظهر في التطبيق
     days = int(rem_time / 86400)
     return f"ACTIVE|{days} Days" 
 
@@ -89,7 +87,7 @@ def check_status():
 def get_news():
     return get_global_news()
 
-# --- [ واجهة البوت - تعديل منطق الدخول ] ---
+# --- [ واجهة البوت ] ---
 @bot.message_handler(commands=['start'])
 def start(m):
     uid = str(m.from_user.id)
@@ -99,7 +97,6 @@ def start(m):
     user_data = get_user(uid)
     
     if not user_data:
-        # فحص إذا كان هناك رابط دعوة
         inviter_id = args[1] if len(args) > 1 and args[1].isdigit() and args[1] != uid else None
         user_data = {
             "current_app": None, "name": username, "invited_by": inviter_id,
@@ -109,11 +106,8 @@ def start(m):
     else:
         update_user(uid, {"name": username})
 
-    # معالجة الروابط القادمة من التطبيق
     if len(args) > 1:
         param = args[1]
-        
-        # 1. حالة التجربة المجانية
         if "trial_" in param:
             cid = param.replace("trial_", "")
             update_user(uid, {"current_app": cid})
@@ -121,8 +115,6 @@ def start(m):
             markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton("🎁 تجربة مجانية", callback_data=f"trial_select_{cid}"))
             return bot.send_message(m.chat.id, "مرحباً بك! اضغط أدناه للحصول على التجربة المجانية:", reply_markup=markup)
-
-        # 2. حالة شراء اشتراك (بأقل من 8 ريال)
         elif "buy_" in param:
             cid = param.replace("buy_", "")
             update_user(uid, {"current_app": cid})
@@ -130,16 +122,12 @@ def start(m):
             markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton("🛒 باقل من 8 ريال", callback_data="u_buy"))
             return bot.send_message(m.chat.id, "مرحباً بك! يمكنك الاشتراك الآن بأفضل سعر:", reply_markup=markup)
-
-        # 3. حالة تفعيل الكود المباشر
         elif "redeem_" in param:
             cid = param.replace("redeem_", "")
             update_user(uid, {"current_app": cid, "temp_target_app": cid})
             update_app_link(cid, {"telegram_id": uid})
             msg = bot.send_message(m.chat.id, "🎫 **أرسل كود التفعيل الآن ليتم تفعيله فوراً على جهازك:**")
             return bot.register_next_step_handler(msg, direct_redeem_step)
-
-        # 4. الحالة الافتراضية للربط العادي
         elif "_" in param:
             cid = param
             link_data = get_app_link(cid) or {"end_time": 0, "banned": False, "trial_last_time": 0, "gift_claimed": False}
@@ -148,7 +136,6 @@ def start(m):
             update_app_link(cid, link_data)
             bot.send_message(m.chat.id, "✅ **تم ربط جهازك بنجاح!**", parse_mode="Markdown")
 
-    # القائمة الرئيسية الافتراضية
     main_markup = types.InlineKeyboardMarkup(row_width=2)
     main_markup.add(
         types.InlineKeyboardButton("📱 تطبيقاتي ورصيدي", callback_data="u_dashboard"),
@@ -159,27 +146,20 @@ def start(m):
     )
     bot.send_message(m.chat.id, f"مرحباً بك يا **{username}** 🌟\nاستخدم القائمة أدناه للتحكم في اشتراكاتك:", reply_markup=main_markup, parse_mode="Markdown") 
 
-# --- [ تفعيل الكود المباشر ] ---
 def direct_redeem_step(m):
     code = m.text.strip()
     uid = str(m.from_user.id)
     user_data = get_user(uid)
     cid = user_data.get("temp_target_app")
-    
-    if not cid: return bot.send_message(m.chat.id, "❌ خطأ في تحديد الجهاز، حاول مرة أخرى.")
-    
+    if not cid: return bot.send_message(m.chat.id, "❌ خطأ في تحديد الجهاز.")
     days = get_voucher(code)
-    if not days: return bot.send_message(m.chat.id, "❌ الكود غير صحيح أو مستخدم.")
-    
+    if not days: return bot.send_message(m.chat.id, "❌ الكود غير صحيح.")
     link_data = get_app_link(cid)
     new_end_time = max(time.time(), link_data.get("end_time", 0)) + (days * 86400)
     update_app_link(cid, {"end_time": new_end_time})
     delete_voucher(code)
-    
-    add_log(f"تفعيل كود ({days} يوم) للجهاز {cid}")
-    bot.send_message(m.chat.id, f"✅ تم تفعيل {days} يوم بنجاح لجهازك الحالي!")
+    bot.send_message(m.chat.id, f"✅ تم تفعيل {days} يوم بنجاح!")
 
-# --- [ معالجة ضغطات الأزرار ] ---
 @bot.callback_query_handler(func=lambda q: True)
 def handle_calls(q):
     uid = str(q.from_user.id)
@@ -195,34 +175,53 @@ def handle_calls(q):
     
     elif q.from_user.id == ADMIN_ID:
         if q.data == "list_all": show_detailed_users(q.message)
-        elif q.data == "admin_logs": show_logs(q.message)
-        elif q.data == "top_ref": show_top_referrers(q.message)
         elif q.data == "gen_key":
             msg = bot.send_message(q.message.chat.id, "كم عدد الأيام؟")
             bot.register_next_step_handler(msg, process_gen_key)
-        elif q.data == "bc_tele":
-            msg = bot.send_message(q.message.chat.id, "ارسل رسالة الإذاعة:")
-            bot.register_next_step_handler(msg, do_bc_tele)
         elif q.data == "bc_app":
             msg = bot.send_message(q.message.chat.id, "ارسل الخبر للتطبيق:")
             bot.register_next_step_handler(msg, do_bc_app)
         elif q.data in ["ban_op", "unban_op"]:
-            msg = bot.send_message(q.message.chat.id, "ارسل المعرف:")
+            msg = bot.send_message(q.message.chat.id, "ارسل معرف الجهاز (ID) المراد التعامل معه:")
             bot.register_next_step_handler(msg, process_ban_unban, q.data) 
 
-# --- [ بقية وظائف النطام - بدون تغيير ] ---
+# --- [ وظائف الإدارة المعدلة ] ---
 
 def show_detailed_users(m):
     links = db_fs.collection("app_links").get()
     if not links: return bot.send_message(m.chat.id, "لا توجد أجهزة مسجلة.")
-    full_list = "📂 **إحصائيات الأجهزة:**\n\n"
+    
+    full_list = "📂 **إحصائيات المستخدمين والتطبيقات:**\n\n"
     for doc in links:
         cid = doc.id
         data = doc.to_dict()
+        t_id = data.get("telegram_id")
+        
+        # جلب اسم المستخدم من قاعدة بيانات users
+        u_info = get_user(t_id) if t_id else None
+        u_name = u_info.get("name", "غير معروف") if u_info else "غير مرتبط"
+        
         rem_time = data.get("end_time", 0) - time.time()
         stat = "🔴 محظور" if data.get("banned") else (f"🟢 {int(rem_time/86400)} يوم" if rem_time > 0 else "⚪ منتهي")
-        full_list += f"🆔: `{cid}` | {stat}\n"
+        
+        # عرض المعرف داخل كود لسهولة النسخ بلمسة واحدة
+        full_list += f"👤 المستخدم: **{u_name}**\n🆔 المعرف: `{cid}`\n📊 الحالة: {stat}\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+    
     bot.send_message(m.chat.id, full_list, parse_mode="Markdown")
+
+def process_ban_unban(m, mode):
+    target_cid = m.text.strip()
+    link_data = get_app_link(target_cid)
+    
+    if link_data:
+        is_ban = (mode == "ban_op")
+        update_app_link(target_cid, {"banned": is_ban})
+        action = "حظر" if is_ban else "فك حظر"
+        bot.send_message(m.chat.id, f"✅ تم {action} الجهاز بنجاح!\nID: `{target_cid}`", parse_mode="Markdown")
+    else:
+        bot.send_message(m.chat.id, "❌ لم يتم العثور على جهاز بهذا المعرف. تأكد من نسخ المعرف الصحيح من القائمة.")
+
+# --- [ بقية وظائف النظام ] ---
 
 def user_dashboard(m):
     uid = str(m.chat.id)
@@ -304,23 +303,11 @@ def show_logs(m):
     logs_text = "\n".join([doc.to_dict().get("text") for doc in logs_ref]) or "لا توجد سجلات."
     bot.send_message(m.chat.id, f"📝 **السجلات:**\n\n{logs_text}")
 
-def show_top_referrers(m):
-    users_ref = db_fs.collection("users").order_by("referral_count", direction=firestore.Query.DESCENDING).limit(5).get()
-    msg = "🏆 **الأكثر دعوة:**\n"
-    for i, doc in enumerate(users_ref, 1): msg += f"{i}- {doc.to_dict().get('name')} ({doc.to_dict().get('referral_count')})\n"
-    bot.send_message(m.chat.id, msg)
-
 def show_referral_info(m):
     uid = str(m.chat.id)
     user_data = get_user(uid)
     ref_link = f"https://t.me/{bot.get_me().username}?start={uid}"
     bot.send_message(m.chat.id, f"🔗 رابط إحالتك:\n`{ref_link}`\n\nستحصل على 7 أيام لكل شخص يربط جهازه.", parse_mode="Markdown")
-
-def do_bc_tele(m):
-    for doc in db_fs.collection("users").get():
-        try: bot.send_message(doc.id, m.text)
-        except: pass
-    bot.send_message(m.chat.id, "✅ تم الإرسال.")
 
 def do_bc_app(m):
     set_global_news(m.text)
@@ -331,12 +318,6 @@ def process_gen_key(m):
     code = f"NJM-{str(uuid.uuid4())[:8].upper()}"
     db_fs.collection("vouchers").document(code).set({"days": int(m.text)})
     bot.send_message(m.chat.id, f"🎫 كود جديد:\n`{code}`", parse_mode="Markdown")
-
-def process_ban_unban(m, mode):
-    target = m.text.strip()
-    if get_app_link(target):
-        update_app_link(target, {"banned": (mode == "ban_op")})
-        bot.send_message(m.chat.id, "✅ تمت العملية.")
 
 @bot.pre_checkout_query_handler(func=lambda q: True)
 def checkout(q): bot.answer_pre_checkout_query(q.id, ok=True) 
@@ -355,4 +336,6 @@ def run():
 
 if __name__ == "__main__":
     Thread(target=run).start()
+    # سطر التنظيف لمنع تعارض Webhook
+    bot.remove_webhook()
     bot.infinity_polling()
