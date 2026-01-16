@@ -132,7 +132,7 @@ def start(m):
                 link_data["end_time"] = max(time.time(), link_data.get("end_time", 0)) + (3 * 86400)
                 link_data["gift_claimed"] = True
                 update_app_link(cid, link_data)
-                bot.send_message(m.chat.id, "🎁 تم منحك 3 أيام هدية لانضمامك للقناة!")
+                bot.send_message(m.chat.id, "🎁 تم منحك 3 أيام مجان ارجع الا التطبيق وضقط دخول!")
                 
                 # مكافأة الداعي
                 inviter = user_data.get("invited_by")
@@ -171,7 +171,7 @@ def show_main_menu(m, username):
         types.InlineKeyboardButton("🎫 تفعيل كود", callback_data="u_redeem"),
         types.InlineKeyboardButton("🔗 إحالاتي ومكافآتي", callback_data="u_referral"),
         types.InlineKeyboardButton("🎁 تجربة مجانية", callback_data="u_trial"),
-        types.InlineKeyboardButton("🛒 شراء اشتراك", callback_data="u_buy")
+        types.InlineKeyboardButton("🛒بأقل من 8 ريال اشتر 100 نجمه وشترك شهر كامل", callback_data="u_buy")
     )
     bot.send_message(m.chat.id, f"مرحباً بك يا **{username}** 🌟\nاستخدم القائمة للتحكم أو اطلب من داخل التطبيق:", reply_markup=markup, parse_mode="Markdown")
 
