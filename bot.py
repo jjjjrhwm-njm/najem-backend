@@ -6,11 +6,10 @@ from threading import Thread
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-# --- [ الإعدادات الأساسية - تم إخفاؤها بالكامل ] ---
-# تأكد من إضافة هذه الأسماء (Keys) في صفحة Environment في راندر
+# --- [ الإعدادات الأساسية - أصبحت سرية الآن ] ---
 API_TOKEN = os.getenv('BOT_TOKEN')
-ADMIN_ID = int(os.getenv('ADMIN_ID'))
-CHANNEL_ID = os.getenv('CHANNEL_ID')
+ADMIN_ID = int(os.getenv('ADMIN_ID', 7650083401))
+CHANNEL_ID = os.getenv('CHANNEL_ID', "@jrhwm0njm") 
 
 # تهيئة Firebase Firestore
 if not firebase_admin._apps:
@@ -81,6 +80,7 @@ def check_status():
     rem_time = data.get("end_time", 0) - time.time()
     if rem_time <= 0: return "EXPIRED"
     
+    # إرسال الحالة مع عدد الأيام المتبقية ليظهر في التطبيق
     days = int(rem_time / 86400)
     return f"ACTIVE|{days} Days" 
 
@@ -98,6 +98,7 @@ def start(m):
     user_data = get_user(uid)
     
     if not user_data:
+        # فحص إذا كان هناك رابط دعوة
         inviter_id = args[1] if len(args) > 1 and args[1].isdigit() and args[1] != uid else None
         user_data = {
             "current_app": None, "name": username, "invited_by": inviter_id,
@@ -107,8 +108,11 @@ def start(m):
     else:
         update_user(uid, {"name": username})
 
+    # معالجة الروابط القادمة من التطبيق
     if len(args) > 1:
         param = args[1]
+        
+        # 1. حالة التجربة المجانية
         if "trial_" in param:
             cid = param.replace("trial_", "")
             update_user(uid, {"current_app": cid})
@@ -116,6 +120,8 @@ def start(m):
             markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton("🎁 تجربة مجانية", callback_data=f"trial_select_{cid}"))
             return bot.send_message(m.chat.id, "مرحباً بك! اضغط أدناه للحصول على التجربة المجانية:", reply_markup=markup)
+
+        # 2. حالة شراء اشتراك (بأقل من 8 ريال)
         elif "buy_" in param:
             cid = param.replace("buy_", "")
             update_user(uid, {"current_app": cid})
@@ -123,12 +129,16 @@ def start(m):
             markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton("🛒 باقل من 8 ريال", callback_data="u_buy"))
             return bot.send_message(m.chat.id, "مرحباً بك! يمكنك الاشتراك الآن بأفضل سعر:", reply_markup=markup)
+
+        # 3. حالة تفعيل الكود المباشر
         elif "redeem_" in param:
             cid = param.replace("redeem_", "")
             update_user(uid, {"current_app": cid, "temp_target_app": cid})
             update_app_link(cid, {"telegram_id": uid})
             msg = bot.send_message(m.chat.id, "🎫 **أرسل كود التفعيل الآن ليتم تفعيله فوراً على جهازك:**")
             return bot.register_next_step_handler(msg, direct_redeem_step)
+
+        # 4. الحالة الافتراضية للربط العادي
         elif "_" in param:
             cid = param
             link_data = get_app_link(cid) or {"end_time": 0, "banned": False, "trial_last_time": 0, "gift_claimed": False}
@@ -137,6 +147,7 @@ def start(m):
             update_app_link(cid, link_data)
             bot.send_message(m.chat.id, "✅ **تم ربط جهازك بنجاح!**", parse_mode="Markdown")
 
+    # القائمة الرئيسية الافتراضية
     main_markup = types.InlineKeyboardMarkup(row_width=2)
     main_markup.add(
         types.InlineKeyboardButton("📱 تطبيقاتي ورصيدي", callback_data="u_dashboard"),
@@ -147,21 +158,27 @@ def start(m):
     )
     bot.send_message(m.chat.id, f"مرحباً بك يا **{username}** 🌟\nاستخدم القائمة أدناه للتحكم في اشتراكاتك:", reply_markup=main_markup, parse_mode="Markdown") 
 
+# --- [ تفعيل الكود المباشر ] ---
 def direct_redeem_step(m):
     code = m.text.strip()
     uid = str(m.from_user.id)
     user_data = get_user(uid)
     cid = user_data.get("temp_target_app")
+    
     if not cid: return bot.send_message(m.chat.id, "❌ خطأ في تحديد الجهاز، حاول مرة أخرى.")
+    
     days = get_voucher(code)
     if not days: return bot.send_message(m.chat.id, "❌ الكود غير صحيح أو مستخدم.")
+    
     link_data = get_app_link(cid)
     new_end_time = max(time.time(), link_data.get("end_time", 0)) + (days * 86400)
     update_app_link(cid, {"end_time": new_end_time})
     delete_voucher(code)
+    
     add_log(f"تفعيل كود ({days} يوم) للجهاز {cid}")
     bot.send_message(m.chat.id, f"✅ تم تفعيل {days} يوم بنجاح لجهازك الحالي!")
 
+# --- [ معالجة ضغطات الأزرار ] ---
 @bot.callback_query_handler(func=lambda q: True)
 def handle_calls(q):
     uid = str(q.from_user.id)
@@ -192,7 +209,7 @@ def handle_calls(q):
             msg = bot.send_message(q.message.chat.id, "ارسل المعرف:")
             bot.register_next_step_handler(msg, process_ban_unban, q.data) 
 
-# --- [ تحديث زر المشتركين والأسماء الحقيقية ] ---
+# --- [ بقية وظائف النطام - تم تعديل دالة المشتركين فقط ] ---
 
 def show_detailed_users(m):
     links = db_fs.collection("app_links").get()
@@ -204,14 +221,14 @@ def show_detailed_users(m):
         t_id = data.get("telegram_id")
         
         # جلب الاسم الحقيقي من جدول المستخدمين
-        u_info = get_user(t_id) if t_id else None
-        u_real_name = u_info.get("name", "غير معروف") if u_info else "غير مرتبط"
+        user_info = get_user(t_id) if t_id else None
+        user_real_name = user_info.get("name", "غير معروف") if user_info else "غير مرتبط"
         
         rem_time = data.get("end_time", 0) - time.time()
         stat = "🔴 محظور" if data.get("banned") else (f"🟢 {int(rem_time/86400)} يوم" if rem_time > 0 else "⚪ منتهي")
         
-        # وضع الـ ID داخل علامة ` ليتم نسخه بلمسة واحدة
-        full_list += f"👤: {u_real_name}\n🆔: `{cid}`\n📊: {stat}\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+        # وضع الـ ID داخل علامة ` ليتم نسخه بلمسة واحدة لضمان دقة الحظر
+        full_list += f"👤: {user_real_name}\n🆔: `{cid}`\n📊: {stat}\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
     bot.send_message(m.chat.id, full_list, parse_mode="Markdown")
 
 def user_dashboard(m):
@@ -326,6 +343,7 @@ def process_ban_unban(m, mode):
     target = m.text.strip()
     if get_app_link(target):
         update_app_link(target, {"banned": (mode == "ban_op")})
+        # تم تعديل رسالة التأكيد لتشمل الـ ID لضمان الدقة
         bot.send_message(m.chat.id, f"✅ تم تنفيذ العملية على الجهاز: `{target}`", parse_mode="Markdown")
 
 @bot.pre_checkout_query_handler(func=lambda q: True)
@@ -345,6 +363,6 @@ def run():
 
 if __name__ == "__main__":
     Thread(target=run).start()
-    # سطر التنظيف المطلوب
+    # سطر التنظيف المطلوب لضمان عدم حدوث تعارض Webhook
     bot.remove_webhook()
     bot.infinity_polling()
