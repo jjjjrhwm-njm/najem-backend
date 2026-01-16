@@ -171,7 +171,7 @@ def show_main_menu(m, username):
         types.InlineKeyboardButton("🎫 تفعيل كود", callback_data="u_redeem"),
         types.InlineKeyboardButton("🔗 إحالاتي ومكافآتي", callback_data="u_referral"),
         types.InlineKeyboardButton("🎁 تجربة مجانية", callback_data="u_trial"),
-        types.InlineKeyboardButton("🛒بأقل من 8 ريال اشتر 100 نجمه وشترك شهر كامل", callback_data="u_buy")
+        types.InlineKeyboardButton("🛒شرا اشتراك شهر ب8ريال", callback_data="u_buy")
     )
     bot.send_message(m.chat.id, f"مرحباً بك يا **{username}** 🌟\nاستخدم القائمة للتحكم أو اطلب من داخل التطبيق:", reply_markup=markup, parse_mode="Markdown")
 
