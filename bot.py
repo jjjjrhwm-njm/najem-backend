@@ -6,10 +6,12 @@ from threading import Thread
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-# --- [ الإعدادات الأساسية - تم تحويلها لمتغيرات بيئة ] ---
-# ملاحظة: قم بإضافة هذه المفاتيح في إعدادات Render (Environment Variables)
-API_TOKEN = os.environ.get('API_TOKEN')
+# --- [ الإعدادات الأساسية - مرتبطة بلوحة التحكم التي أرسلت صورتها ] ---
+# جلب التوكن باستخدام الاسم الظاهر في صورتك (BOT_TOKEN)
+API_TOKEN = os.environ.get('BOT_TOKEN')
+# جلب معرف الآدمن وتحويله لرقم
 ADMIN_ID = int(os.environ.get('ADMIN_ID', 0))
+# جلب معرف القناة
 CHANNEL_ID = os.environ.get('CHANNEL_ID') 
 
 # تهيئة Firebase Firestore
