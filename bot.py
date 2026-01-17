@@ -223,11 +223,47 @@ def handle_calls(q):
         elif q.data == "bc_app":
             msg = bot.send_message(q.message.chat.id, "ارسل الخبر:")
             bot.register_next_step_handler(msg, do_bc_app)
+        
+        # --- [ تعديل أزرار الحظر وفك الحظر ] ---
         elif q.data in ["ban_op", "unban_op"]:
-            msg = bot.send_message(q.message.chat.id, "ارسل المعرف:")
-            bot.register_next_step_handler(msg, process_ban_unban, q.data)
+            m_type = "الحظر" if q.data == "ban_op" else "فك الحظر"
+            mk = types.InlineKeyboardMarkup(row_width=1)
+            mk.add(
+                types.InlineKeyboardButton("📋 اختر من القائمة", callback_data=f"choice_list_{q.data}"),
+                types.InlineKeyboardButton("⌨️ أرسل الآيدي يدوياً", callback_data=f"choice_manual_{q.data}")
+            )
+            bot.send_message(q.message.chat.id, f"يرجى تحديد طريقة {m_type}:", reply_markup=mk)
+        
+        elif q.data.startswith("choice_list_"):
+            mode = q.data.replace("choice_list_", "")
+            list_apps_for_ban(q.message, mode)
+            
+        elif q.data.startswith("choice_manual_"):
+            mode = q.data.replace("choice_manual_", "")
+            msg = bot.send_message(q.message.chat.id, "ارسل معرف الجهاز (CID) المراد معالجته:")
+            bot.register_next_step_handler(msg, process_ban_unban, mode)
+            
+        elif q.data.startswith("exec_ban_"):
+            parts = q.data.split('_')
+            mode = f"{parts[2]}_{parts[3]}"
+            cid = "_".join(parts[4:])
+            update_app_link(cid, {"banned": (mode == "ban_op")})
+            status_txt = "بنجاح" if mode == "ban_op" else "بنجاح"
+            bot.send_message(q.message.chat.id, f"✅ تم تنفيذ العملية على `{cid}` {status_txt}")
 
 # --- [ وظائف الإدارة ] --- 
+
+def list_apps_for_ban(m, mode):
+    apps = db_fs.collection("app_links").limit(50).get()
+    if not apps: return bot.send_message(m.chat.id, "لا توجد أجهزة مسجلة.")
+    mk = types.InlineKeyboardMarkup(row_width=1)
+    for a in apps:
+        cid = a.id
+        pkg = cid.split('_')[-1]
+        is_banned = a.to_dict().get("banned", False)
+        status_icon = "🔴" if is_banned else "🟢"
+        mk.add(types.InlineKeyboardButton(f"{status_icon} {pkg} ({cid[:10]}...)", callback_data=f"exec_ban_{mode}_{cid}"))
+    bot.send_message(m.chat.id, "اختر الجهاز المستهدف من القائمة:", reply_markup=mk)
 
 def show_detailed_users(m):
     try:
