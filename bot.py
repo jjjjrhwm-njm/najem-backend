@@ -1,6 +1,6 @@
 import telebot
 from telebot import types
-from flask import Flask, request
+from flask import Flask, request, render_template_string
 import json, os, time, uuid
 from threading import Thread
 import firebase_admin
@@ -25,8 +25,44 @@ db_fs = firestore.client()
 bot = telebot.TeleBot(API_TOKEN)
 app = Flask(__name__)
 
-# --- [ إدارة قاعدة البيانات ] ---
+# --- [ إضافة: واجهة السيرفر الجديدة ] ---
+@app.route('/ui')
+def server_ui():
+    aid = request.args.get('aid', '')
+    pkg = request.args.get('pkg', '').replace('.', '_')
+    news = get_global_news()
+    # تصميم الواجهة الاحترافي لنجم الإبداع
+    html_content = """
+    <!DOCTYPE html>
+    <html dir="rtl">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body { background: #0f0f0f; color: white; font-family: Arial, sans-serif; text-align: center; padding: 20px; }
+            .container { background: #1a1a1a; border-radius: 15px; padding: 20px; border: 1px solid #333; }
+            .news { color: #00d2ff; font-size: 14px; margin-bottom: 20px; border-bottom: 1px solid #333; padding-bottom: 10px; }
+            .btn { display: block; background: linear-gradient(45deg, #007bff, #00d2ff); color: white; 
+                   text-decoration: none; padding: 15px; margin: 10px 0; border-radius: 10px; font-weight: bold; }
+            .footer { font-size: 10px; color: #555; margin-top: 15px; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h2>🌟 نجم الإبداع</h2>
+            <div class="news">{{ news }}</div>
+            <a href="tg://resolve?domain=Njm_Store_Bot&start=TRIAL_{{ aid }}_{{ pkg }}" class="btn">🎁 تجربة مجانية</a>
+            <a href="tg://resolve?domain=Njm_Store_Bot&start=BUY_{{ aid }}_{{ pkg }}" class="btn">🛒 شراء اشتراك</a>
+            <a href="tg://resolve?domain=Njm_Store_Bot&start=REDEEM_{{ aid }}_{{ pkg }}" class="btn">🎫 تفعيل كود</a>
+            <a href="tg://resolve?domain=Njm_Store_Bot&start=DASH_{{ aid }}_{{ pkg }}" class="btn">💰 مركز الحساب</a>
+        </div>
+        <div class="footer">Device ID: {{ aid }}</div>
+    </body>
+    </html>
+    """
+    return render_template_string(html_content, aid=aid, pkg=pkg, news=news)
 
+# --- [ إدارة قاعدة البيانات ] ---
 def get_user(uid):
     doc = db_fs.collection("users").document(str(uid)).get()
     return doc.to_dict() if doc.exists else None
@@ -205,7 +241,6 @@ def handle_calls(q):
             _, _, _, uid_target, days = q.data.split('_')
             create_final_key(q.message, days, "user", uid_target)
         elif q.data.startswith("gen_for_a_"):
-            # التعامل مع CID الذي قد يحتوي على شرطة سفلية
             parts = q.data.split('_')
             days = parts[-1]
             cid_target = "_".join(parts[3:-1])
@@ -223,53 +258,16 @@ def handle_calls(q):
         elif q.data == "bc_app":
             msg = bot.send_message(q.message.chat.id, "ارسل الخبر:")
             bot.register_next_step_handler(msg, do_bc_app)
-        
-        # --- [ تعديل أزرار الحظر وفك الحظر ] ---
         elif q.data in ["ban_op", "unban_op"]:
-            m_type = "الحظر" if q.data == "ban_op" else "فك الحظر"
-            mk = types.InlineKeyboardMarkup(row_width=1)
-            mk.add(
-                types.InlineKeyboardButton("📋 اختر من القائمة", callback_data=f"choice_list_{q.data}"),
-                types.InlineKeyboardButton("⌨️ أرسل الآيدي يدوياً", callback_data=f"choice_manual_{q.data}")
-            )
-            bot.send_message(q.message.chat.id, f"يرجى تحديد طريقة {m_type}:", reply_markup=mk)
-        
-        elif q.data.startswith("choice_list_"):
-            mode = q.data.replace("choice_list_", "")
-            list_apps_for_ban(q.message, mode)
-            
-        elif q.data.startswith("choice_manual_"):
-            mode = q.data.replace("choice_manual_", "")
-            msg = bot.send_message(q.message.chat.id, "ارسل معرف الجهاز (CID) المراد معالجته:")
-            bot.register_next_step_handler(msg, process_ban_unban, mode)
-            
-        elif q.data.startswith("exec_ban_"):
-            parts = q.data.split('_')
-            mode = f"{parts[2]}_{parts[3]}"
-            cid = "_".join(parts[4:])
-            update_app_link(cid, {"banned": (mode == "ban_op")})
-            status_txt = "بنجاح" if mode == "ban_op" else "بنجاح"
-            bot.send_message(q.message.chat.id, f"✅ تم تنفيذ العملية على `{cid}` {status_txt}")
+            msg = bot.send_message(q.message.chat.id, "ارسل المعرف:")
+            bot.register_next_step_handler(msg, process_ban_unban, q.data)
 
 # --- [ وظائف الإدارة ] --- 
-
-def list_apps_for_ban(m, mode):
-    apps = db_fs.collection("app_links").limit(50).get()
-    if not apps: return bot.send_message(m.chat.id, "لا توجد أجهزة مسجلة.")
-    mk = types.InlineKeyboardMarkup(row_width=1)
-    for a in apps:
-        cid = a.id
-        pkg = cid.split('_')[-1]
-        is_banned = a.to_dict().get("banned", False)
-        status_icon = "🔴" if is_banned else "🟢"
-        mk.add(types.InlineKeyboardButton(f"{status_icon} {pkg} ({cid[:10]}...)", callback_data=f"exec_ban_{mode}_{cid}"))
-    bot.send_message(m.chat.id, "اختر الجهاز المستهدف من القائمة:", reply_markup=mk)
 
 def show_detailed_users(m):
     try:
         all_users = db_fs.collection("users").get()
         if not all_users: return bot.send_message(m.chat.id, "لا يوجد مستخدمين.")
-        
         all_links = db_fs.collection("app_links").get()
         links_map = {}
         for l in all_links:
@@ -278,17 +276,14 @@ def show_detailed_users(m):
             if u_id:
                 if u_id not in links_map: links_map[u_id] = []
                 links_map[u_id].append({"id": l.id, "data": ld})
-
         msg = "📂 **قائمة المشتركين وتطبيقاتهم:**\n\n"
         for user_doc in all_users:
             uid = user_doc.id
             udata = user_doc.to_dict()
             u_name = udata.get("name", "غير معروف")
             user_apps = links_map.get(uid, [])
-            
             msg += f"👤 **المستخدم:** {u_name} (`{uid}`)\n"
-            if not user_apps:
-                msg += "└ 🚫 لا توجد تطبيقات\n"
+            if not user_apps: msg += "└ 🚫 لا توجد تطبيقات\n"
             else:
                 for app_item in user_apps:
                     rem = app_item['data'].get("end_time", 0) - time.time()
@@ -296,14 +291,11 @@ def show_detailed_users(m):
                     stat = "🔴 محظور" if app_item['data'].get("banned") else (f"🟢 {int(rem/86400)} يوم" if rem > 0 else "⚪ منتهي")
                     msg += f"└ 📦 `{pkg}` ⮕ {stat}\n"
             msg += "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-            
             if len(msg) > 3000:
                 bot.send_message(m.chat.id, msg, parse_mode="Markdown")
                 msg = ""
-                
         if msg: bot.send_message(m.chat.id, msg, parse_mode="Markdown")
-    except Exception as e:
-        bot.send_message(m.chat.id, f"حدث خطأ أثناء جلب القائمة: {e}")
+    except Exception as e: bot.send_message(m.chat.id, f"حدث خطأ: {e}")
 
 def show_logs(m):
     logs = db_fs.collection("logs").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(15).get()
@@ -322,7 +314,6 @@ def admin_panel(m):
     users_count = len(db_fs.collection("users").get())
     links_all = db_fs.collection("app_links").get()
     active = sum(1 for d in links_all if d.to_dict().get("end_time", 0) > time.time())
-    
     msg = (f"👑 **إدارة نجم الإبداع**\n\n"
            f"👥 المستخدمين: `{users_count}` | الأجهزة: `{len(links_all)}`\n"
            f"🟢 النشطين: `{active}`\n")
@@ -353,7 +344,6 @@ def user_dashboard(m):
     uid = str(m.chat.id)
     apps = db_fs.collection("app_links").where("telegram_id", "==", uid).get()
     if not apps: return bot.send_message(m.chat.id, "❌ لا توجد تطبيقات مرتبطة.")
-    
     msg = "👤 **حالة اشتراكاتك:**\n"
     for doc in apps:
         data = doc.to_dict()
@@ -367,51 +357,35 @@ def redeem_code_step(m):
     code = m.text.strip()
     vdata = get_voucher(code)
     if not vdata: return bot.send_message(m.chat.id, "❌ الكود غير صحيح.")
-    
     uid = str(m.from_user.id)
-    days = vdata.get("days")
-    target_type = vdata.get("target", "all")
-    target_id = vdata.get("target_id")
-
-    if target_type == "user" and target_id != uid:
-        return bot.send_message(m.chat.id, "❌ هذا الكود مخصص لمستخدم آخر.")
-
+    days, target_type, target_id = vdata.get("days"), vdata.get("target", "all"), vdata.get("target_id")
+    if target_type == "user" and target_id != uid: return bot.send_message(m.chat.id, "❌ كود لمستخدم آخر.")
     user_data = get_user(uid)
     current_cid = user_data.get("current_app")
-    
     def apply_redeem(cid):
         if target_type == "app" and target_id not in cid:
-            bot.send_message(m.chat.id, f"❌ هذا الكود مخصص لتطبيق محدد: `{target_id}`")
-            return False
+            bot.send_message(m.chat.id, f"❌ كود لتطبيق محدد: `{target_id}`"); return False
         link = get_app_link(cid)
         new_time = max(time.time(), link.get("end_time", 0)) + (days * 86400)
         update_app_link(cid, {"end_time": new_time})
-        delete_voucher(code)
-        bot.send_message(m.chat.id, f"✅ تم تفعيل {days} يوم بنجاح!")
-        add_log(f"تفعيل كود {days} يوم لـ {user_data.get('name')}")
-        return True
-
-    if current_cid:
-        apply_redeem(current_cid)
+        delete_voucher(code); bot.send_message(m.chat.id, f"✅ تم تفعيل {days} يوم!")
+        add_log(f"تفعيل {days} يوم لـ {user_data.get('name')}"); return True
+    if current_cid: apply_redeem(current_cid)
     else:
         apps = db_fs.collection("app_links").where("telegram_id", "==", uid).get()
         if not apps: return bot.send_message(m.chat.id, "❌ اربط جهازك أولاً.")
         update_user(uid, {"temp_code": code})
         markup = types.InlineKeyboardMarkup(row_width=1)
-        for doc in apps:
-            markup.add(types.InlineKeyboardButton(f"📦 {doc.id.split('_')[-1]}", callback_data=f"redeem_select_{doc.id}"))
-        bot.send_message(m.chat.id, "🛠️ اختر التطبيق لتفعيله:", reply_markup=markup) 
+        for doc in apps: markup.add(types.InlineKeyboardButton(f"📦 {doc.id.split('_')[-1]}", callback_data=f"redeem_select_{doc.id}"))
+        bot.send_message(m.chat.id, "🛠️ اختر التطبيق:", reply_markup=markup) 
 
 def redeem_select_app(m, cid):
     uid = str(m.chat.id)
     user_data = get_user(uid)
     vdata = get_voucher(user_data.get("temp_code"))
     if vdata:
-        days = vdata.get("days")
-        target_id = vdata.get("target_id")
-        if vdata.get("target") == "app" and target_id not in cid:
-             return bot.send_message(m.chat.id, f"❌ الكود لا يصلح لهذا التطبيق.")
-        
+        days, target_id = vdata.get("days"), vdata.get("target_id")
+        if vdata.get("target") == "app" and target_id not in cid: return bot.send_message(m.chat.id, "❌ الكود لا يصلح.")
         link = get_app_link(cid)
         update_app_link(cid, {"end_time": max(time.time(), link.get("end_time", 0)) + (days * 86400)})
         delete_voucher(user_data["temp_code"])
@@ -421,130 +395,91 @@ def redeem_select_app(m, cid):
 def process_trial(m):
     uid = str(m.chat.id)
     apps = db_fs.collection("app_links").where("telegram_id", "==", uid).get()
-    if not apps: return bot.send_message(m.chat.id, "❌ لا يوجد تطبيق مرتبط.")
-    
+    if not apps: return bot.send_message(m.chat.id, "❌ لا يوجد تطبيق.")
     markup = types.InlineKeyboardMarkup(row_width=1)
-    for doc in apps:
-        markup.add(types.InlineKeyboardButton(f"📦 {doc.id.split('_')[-1]}", callback_data=f"trial_select_{doc.id}"))
+    for doc in apps: markup.add(types.InlineKeyboardButton(f"📦 {doc.id.split('_')[-1]}", callback_data=f"trial_select_{doc.id}"))
     bot.send_message(m.chat.id, "🛠️ اختر تطبيق التجربة:", reply_markup=markup) 
 
 def trial_select_app(m, cid):
     data = get_app_link(cid)
     if not data: return
-    if time.time() - data.get("trial_last_time", 0) < 86400:
-        return bot.send_message(m.chat.id, f"❌ التجربة متاحة كل 24 ساعة لجهازك: `{cid.split('_')[-1]}`")
-    
+    if time.time() - data.get("trial_last_time", 0) < 86400: return bot.send_message(m.chat.id, f"❌ التجربة كل 24 ساعة لجهازك.")
     new_time = max(time.time(), data.get("end_time", 0)) + 259200
     update_app_link(cid, {"trial_last_time": time.time(), "end_time": new_time})
-    bot.send_message(m.chat.id, f"✅ تم تفعيل التجربة لـ: `{cid.split('_')[-1]}`") 
+    bot.send_message(m.chat.id, f"✅ تم تفعيل التجربة!") 
 
 def send_payment(m):
     uid = str(m.chat.id)
     user_data = get_user(uid)
     cid = user_data.get("current_app")
     if not cid: return bot.send_message(m.chat.id, "❌ اربط التطبيق أولاً.")
-    
-    bot.send_invoice(m.chat.id, title="اشتراك 30 يوم", description=f"تفعيل الجهاز: {cid.split('_')[-1]}", 
-                     invoice_payload=f"pay_{cid}", provider_token="", currency="XTR",
-                     prices=[types.LabeledPrice(label="VIP", amount=100)]) 
+    bot.send_invoice(m.chat.id, title="اشتراك 30 يوم", description=f"تفعيل الجهاز: {cid.split('_')[-1]}", invoice_payload=f"pay_{cid}", provider_token="", currency="XTR", prices=[types.LabeledPrice(label="VIP", amount=100)]) 
 
-# --- [ خيوط الخلفية ووظائف المساعدة ] --- 
-
+# --- [ وظائف المساعدة ] --- 
 def wipe_all_data(m):
-    collections = ["users", "app_links", "logs", "vouchers"]
-    for coll in collections:
-        docs = db_fs.collection(coll).get()
-        for d in docs: d.reference.delete()
-    bot.send_message(m.chat.id, "✅ تم تصفير جميع قواعد البيانات بنجاح.")
+    for coll in ["users", "app_links", "logs", "vouchers"]:
+        for d in db_fs.collection(coll).get(): d.reference.delete()
+    bot.send_message(m.chat.id, "✅ تم التصفير.")
 
 def process_gen_key_start(m):
-    if not m.text.isdigit(): return bot.send_message(m.chat.id, "أرسل أرقام فقط.")
+    if not m.text.isdigit(): return bot.send_message(m.chat.id, "أرقام فقط.")
     days = int(m.text)
     mk = types.InlineKeyboardMarkup()
-    mk.add(types.InlineKeyboardButton("🌍 كود عام", callback_data=f"set_target_all_{days}"))
-    mk.add(types.InlineKeyboardButton("📦 لتطبيق معين", callback_data=f"set_target_app_{days}"))
-    mk.add(types.InlineKeyboardButton("👤 لشخص معين", callback_data=f"set_target_user_{days}"))
-    bot.send_message(m.chat.id, "اختر نوع الكود:", reply_markup=mk)
+    mk.add(types.InlineKeyboardButton("🌍 عام", callback_data=f"set_target_all_{days}"), types.InlineKeyboardButton("📦 تطبيق", callback_data=f"set_target_app_{days}"), types.InlineKeyboardButton("👤 شخص", callback_data=f"set_target_user_{days}"))
+    bot.send_message(m.chat.id, "نوع الكود:", reply_markup=mk)
 
 def process_key_type_selection(q):
     _, _, target, days = q.data.split('_')
-    if target == "all":
-        create_final_key(q.message, days, "all", None)
-    elif target == "app":
+    if target == "all": create_final_key(q.message, days, "all", None)
+    else:
         mk = types.InlineKeyboardMarkup(row_width=1)
-        mk.add(types.InlineKeyboardButton("🔍 عرض التطبيقات للاختيار", callback_data=f"pick_a_list_{days}"),
-               types.InlineKeyboardButton("⌨️ ارسل اسم التطبيق يدوياً", callback_data=f"pick_a_manual_{days}"))
-        bot.send_message(q.message.chat.id, "كيف تريد تحديد التطبيق؟", reply_markup=mk)
-    elif target == "user":
-        mk = types.InlineKeyboardMarkup(row_width=1)
-        mk.add(types.InlineKeyboardButton("👥 عرض المستخدمين للاختيار", callback_data=f"pick_u_list_{days}"),
-               types.InlineKeyboardButton("⌨️ ارسل ايدي الشخص يدوياً", callback_data=f"pick_u_manual_{days}"))
-        bot.send_message(q.message.chat.id, "كيف تريد تحديد الشخص؟", reply_markup=mk)
+        mk.add(types.InlineKeyboardButton("🔍 اختيار من القائمة", callback_data=f"pick_{target[0]}_list_{days}"), types.InlineKeyboardButton("⌨️ يدوي", callback_data=f"pick_{target[0]}_manual_{days}"))
+        bot.send_message(q.message.chat.id, "تحديد الهدف:", reply_markup=mk)
 
 def list_users_for_key(m, days):
     users = db_fs.collection("users").limit(30).get()
-    if not users: return bot.send_message(m.chat.id, "لا يوجد مستخدمين.")
     mk = types.InlineKeyboardMarkup(row_width=1)
-    for u in users:
-        ud = u.to_dict()
-        mk.add(types.InlineKeyboardButton(f"👤 {ud.get('name')} ({u.id})", callback_data=f"gen_for_u_{u.id}_{days}"))
-    bot.send_message(m.chat.id, "اختر المستخدم:", reply_markup=mk)
+    for u in users: mk.add(types.InlineKeyboardButton(f"👤 {u.to_dict().get('name')}", callback_data=f"gen_for_u_{u.id}_{days}"))
+    bot.send_message(m.chat.id, "اختر الشخص:", reply_markup=mk)
 
 def list_apps_for_key(m, days):
     apps = db_fs.collection("app_links").limit(30).get()
-    if not apps: return bot.send_message(m.chat.id, "لا توجد تطبيقات مسجلة.")
-    mk = types.InlineKeyboardMarkup(row_width=1)
-    seen_pkgs = set()
+    mk = types.InlineKeyboardMarkup(row_width=1); seen = set()
     for a in apps:
         pkg = a.id.split('_')[-1]
-        if pkg not in seen_pkgs:
-            mk.add(types.InlineKeyboardButton(f"📦 {pkg}", callback_data=f"gen_for_a_{a.id}_{days}"))
-            seen_pkgs.add(pkg)
+        if pkg not in seen: mk.add(types.InlineKeyboardButton(f"📦 {pkg}", callback_data=f"gen_for_a_{a.id}_{days}")); seen.add(pkg)
     bot.send_message(m.chat.id, "اختر التطبيق:", reply_markup=mk)
 
 def create_final_key(m, days, target, target_id):
     code = f"NJM-{str(uuid.uuid4())[:8].upper()}"
-    db_fs.collection("vouchers").document(code).set({
-        "days": int(days), "target": target, "target_id": target_id
-    })
-    txt = f"🎫 **كود جديد ({days} يوم)**\nالنوع: {target}\n"
-    if target_id: 
-        display_id = target_id.split('_')[-1] if "_" in target_id else target_id
-        txt += f"الهدف: `{display_id}`\n"
-    txt += f"الكود: `{code}`"
+    db_fs.collection("vouchers").document(code).set({"days": int(days), "target": target, "target_id": target_id})
+    txt = f"🎫 **كود جديد ({days} يوم)**\nالنوع: {target}\nالكود: `{code}`"
     bot.send_message(m.chat.id, txt, parse_mode="Markdown")
 
 def expiry_notifier():
     while True:
         try:
-            now = time.time()
-            links = db_fs.collection("app_links").get()
+            now = time.time(); links = db_fs.collection("app_links").get()
             for doc in links:
                 data = doc.to_dict()
                 if 82800 < (data.get("end_time", 0) - now) < 86400:
                     uid = data.get("telegram_id")
-                    if uid:
-                        try: bot.send_message(uid, f"⚠️ اشتراكك في `{doc.id.split('_')[-1]}` ينتهي غداً!")
-                        except: pass
+                    if uid: try: bot.send_message(uid, f"⚠️ ينتهي اشتراكك غداً!")
+                    except: pass
             time.sleep(3600)
         except: time.sleep(60) 
 
 def do_bc_tele(m):
-    users = db_fs.collection("users").get()
-    for d in users:
+    for d in db_fs.collection("users").get():
         try: bot.send_message(d.id, f"📢 **إعلان:**\n\n{m.text}")
         except: pass
-    bot.send_message(m.chat.id, "✅ تم الإرسال.") 
+    bot.send_message(m.chat.id, "✅ تم.") 
 
-def do_bc_app(m):
-    set_global_news(m.text)
-    bot.send_message(m.chat.id, "✅ تم تحديث الخبر.") 
+def do_bc_app(m): set_global_news(m.text); bot.send_message(m.chat.id, "✅ تم.") 
 
 def process_ban_unban(m, mode):
     target = m.text.strip()
-    if get_app_link(target):
-        update_app_link(target, {"banned": (mode == "ban_op")})
-        bot.send_message(m.chat.id, "✅ تم.")
+    if get_app_link(target): update_app_link(target, {"banned": (mode == "ban_op")}); bot.send_message(m.chat.id, "✅ تم.")
     else: bot.send_message(m.chat.id, "❌ غير موجود.") 
 
 @bot.pre_checkout_query_handler(func=lambda q: True)
@@ -555,12 +490,10 @@ def pay_success(m):
     cid = m.successful_payment.invoice_payload.replace("pay_", "")
     link = get_app_link(cid)
     if link:
-        new_time = max(time.time(), link.get("end_time", 0)) + (30 * 86400)
-        update_app_link(cid, {"end_time": new_time})
-        bot.send_message(m.chat.id, f"✅ تم الشراء بنجاح لجهازك: {cid.split('_')[-1]}") 
+        update_app_link(cid, {"end_time": max(time.time(), link.get("end_time", 0)) + (30 * 86400)})
+        bot.send_message(m.chat.id, "✅ تم الشراء بنجاح!") 
 
-def run():
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080))) 
+def run(): app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080))) 
 
 if __name__ == "__main__":
     Thread(target=run).start()
