@@ -185,8 +185,32 @@ def handle_calls(q):
         elif q.data == "gen_key":
             msg = bot.send_message(q.message.chat.id, "كم عدد الأيام؟")
             bot.register_next_step_handler(msg, process_gen_key_start)
+        
+        # منطق توليد الأكواد المطور
         elif q.data.startswith("set_target_"):
             process_key_type_selection(q)
+        elif q.data.startswith("pick_u_list_"):
+            list_users_for_key(q.message, q.data.split('_')[-1])
+        elif q.data.startswith("pick_u_manual_"):
+            days = q.data.split('_')[-1]
+            msg = bot.send_message(q.message.chat.id, "ارسل ايدي (ID) المستخدم:")
+            bot.register_next_step_handler(msg, lambda m: create_final_key(m, days, "user", m.text.strip()))
+        elif q.data.startswith("pick_a_list_"):
+            list_apps_for_key(q.message, q.data.split('_')[-1])
+        elif q.data.startswith("pick_a_manual_"):
+            days = q.data.split('_')[-1]
+            msg = bot.send_message(q.message.chat.id, "ارسل اسم حزمة التطبيق (Package ID):")
+            bot.register_next_step_handler(msg, lambda m: create_final_key(m, days, "app", m.text.strip()))
+        elif q.data.startswith("gen_for_u_"):
+            _, _, _, uid_target, days = q.data.split('_')
+            create_final_key(q.message, days, "user", uid_target)
+        elif q.data.startswith("gen_for_a_"):
+            # التعامل مع CID الذي قد يحتوي على شرطة سفلية
+            parts = q.data.split('_')
+            days = parts[-1]
+            cid_target = "_".join(parts[3:-1])
+            create_final_key(q.message, days, "app", cid_target)
+
         elif q.data == "reset_data_ask":
             mk = types.InlineKeyboardMarkup()
             mk.add(types.InlineKeyboardButton("⚠️ نعم، احذف كل شيء", callback_data="confirm_full_reset"))
@@ -313,14 +337,12 @@ def redeem_code_step(m):
     target_type = vdata.get("target", "all")
     target_id = vdata.get("target_id")
 
-    # التحقق من صلاحية الكود لهذا المستخدم أو التطبيق
     if target_type == "user" and target_id != uid:
         return bot.send_message(m.chat.id, "❌ هذا الكود مخصص لمستخدم آخر.")
 
     user_data = get_user(uid)
     current_cid = user_data.get("current_app")
     
-    # وظيفة التفعيل
     def apply_redeem(cid):
         if target_type == "app" and target_id not in cid:
             bot.send_message(m.chat.id, f"❌ هذا الكود مخصص لتطبيق محدد: `{target_id}`")
@@ -413,11 +435,36 @@ def process_key_type_selection(q):
     if target == "all":
         create_final_key(q.message, days, "all", None)
     elif target == "app":
-        msg = bot.send_message(q.message.chat.id, "ارسل اسم حزمة التطبيق (Package ID):")
-        bot.register_next_step_handler(msg, lambda m: create_final_key(m, days, "app", m.text.strip()))
+        mk = types.InlineKeyboardMarkup(row_width=1)
+        mk.add(types.InlineKeyboardButton("🔍 عرض التطبيقات للاختيار", callback_data=f"pick_a_list_{days}"),
+               types.InlineKeyboardButton("⌨️ ارسل اسم التطبيق يدوياً", callback_data=f"pick_a_manual_{days}"))
+        bot.send_message(q.message.chat.id, "كيف تريد تحديد التطبيق؟", reply_markup=mk)
     elif target == "user":
-        msg = bot.send_message(q.message.chat.id, "ارسل ايدي (ID) المستخدم:")
-        bot.register_next_step_handler(msg, lambda m: create_final_key(m, days, "user", m.text.strip()))
+        mk = types.InlineKeyboardMarkup(row_width=1)
+        mk.add(types.InlineKeyboardButton("👥 عرض المستخدمين للاختيار", callback_data=f"pick_u_list_{days}"),
+               types.InlineKeyboardButton("⌨️ ارسل ايدي الشخص يدوياً", callback_data=f"pick_u_manual_{days}"))
+        bot.send_message(q.message.chat.id, "كيف تريد تحديد الشخص؟", reply_markup=mk)
+
+def list_users_for_key(m, days):
+    users = db_fs.collection("users").limit(30).get()
+    if not users: return bot.send_message(m.chat.id, "لا يوجد مستخدمين.")
+    mk = types.InlineKeyboardMarkup(row_width=1)
+    for u in users:
+        ud = u.to_dict()
+        mk.add(types.InlineKeyboardButton(f"👤 {ud.get('name')} ({u.id})", callback_data=f"gen_for_u_{u.id}_{days}"))
+    bot.send_message(m.chat.id, "اختر المستخدم:", reply_markup=mk)
+
+def list_apps_for_key(m, days):
+    apps = db_fs.collection("app_links").limit(30).get()
+    if not apps: return bot.send_message(m.chat.id, "لا توجد تطبيقات مسجلة.")
+    mk = types.InlineKeyboardMarkup(row_width=1)
+    seen_pkgs = set()
+    for a in apps:
+        pkg = a.id.split('_')[-1]
+        if pkg not in seen_pkgs:
+            mk.add(types.InlineKeyboardButton(f"📦 {pkg}", callback_data=f"gen_for_a_{a.id}_{days}"))
+            seen_pkgs.add(pkg)
+    bot.send_message(m.chat.id, "اختر التطبيق:", reply_markup=mk)
 
 def create_final_key(m, days, target, target_id):
     code = f"NJM-{str(uuid.uuid4())[:8].upper()}"
@@ -425,7 +472,9 @@ def create_final_key(m, days, target, target_id):
         "days": int(days), "target": target, "target_id": target_id
     })
     txt = f"🎫 **كود جديد ({days} يوم)**\nالنوع: {target}\n"
-    if target_id: txt += f"الهدف: `{target_id}`\n"
+    if target_id: 
+        display_id = target_id.split('_')[-1] if "_" in target_id else target_id
+        txt += f"الهدف: `{display_id}`\n"
     txt += f"الكود: `{code}`"
     bot.send_message(m.chat.id, txt, parse_mode="Markdown")
 
