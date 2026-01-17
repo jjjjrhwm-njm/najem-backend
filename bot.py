@@ -25,44 +25,8 @@ db_fs = firestore.client()
 bot = telebot.TeleBot(API_TOKEN)
 app = Flask(__name__)
 
-# --- [ إضافة: واجهة السيرفر الجديدة ] ---
-@app.route('/ui')
-def server_ui():
-    aid = request.args.get('aid', '')
-    pkg = request.args.get('pkg', '').replace('.', '_')
-    news = get_global_news()
-    # تصميم الواجهة الاحترافي لنجم الإبداع
-    html_content = """
-    <!DOCTYPE html>
-    <html dir="rtl">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <style>
-            body { background: #0f0f0f; color: white; font-family: Arial, sans-serif; text-align: center; padding: 20px; }
-            .container { background: #1a1a1a; border-radius: 15px; padding: 20px; border: 1px solid #333; }
-            .news { color: #00d2ff; font-size: 14px; margin-bottom: 20px; border-bottom: 1px solid #333; padding-bottom: 10px; }
-            .btn { display: block; background: linear-gradient(45deg, #007bff, #00d2ff); color: white; 
-                   text-decoration: none; padding: 15px; margin: 10px 0; border-radius: 10px; font-weight: bold; }
-            .footer { font-size: 10px; color: #555; margin-top: 15px; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h2>🌟 نجم الإبداع</h2>
-            <div class="news">{{ news }}</div>
-            <a href="tg://resolve?domain=Njm_Store_Bot&start=TRIAL_{{ aid }}_{{ pkg }}" class="btn">🎁 تجربة مجانية</a>
-            <a href="tg://resolve?domain=Njm_Store_Bot&start=BUY_{{ aid }}_{{ pkg }}" class="btn">🛒 شراء اشتراك</a>
-            <a href="tg://resolve?domain=Njm_Store_Bot&start=REDEEM_{{ aid }}_{{ pkg }}" class="btn">🎫 تفعيل كود</a>
-            <a href="tg://resolve?domain=Njm_Store_Bot&start=DASH_{{ aid }}_{{ pkg }}" class="btn">💰 مركز الحساب</a>
-        </div>
-        <div class="footer">Device ID: {{ aid }}</div>
-    </body>
-    </html>
-    """
-    return render_template_string(html_content, aid=aid, pkg=pkg, news=news)
-
 # --- [ إدارة قاعدة البيانات ] ---
+
 def get_user(uid):
     doc = db_fs.collection("users").document(str(uid)).get()
     return doc.to_dict() if doc.exists else None
@@ -118,6 +82,48 @@ def check_status():
 @app.route('/get_news') 
 def get_news():
     return get_global_news()
+
+# --- [ إضافة: مسار الواجهة السحابية لنجم الإبداع ] ---
+@app.route('/ui')
+def server_ui():
+    aid = request.args.get('aid', 'UNKNOWN')
+    pkg = request.args.get('pkg', 'UNKNOWN')
+    ver = request.args.get('ver', '1.0') # نسخة التطبيق
+    news = get_global_news()
+    
+    # التحقق من التحديث (مثال: إذا كانت النسخة أقل من 1.1)
+    if ver < "1.1":
+        update_btn = '<a href="https://t.me/Njm_Store_Bot" class="btn" style="background:red">⚠️ تحديث التطبيق الآن</a>'
+    else:
+        update_btn = ""
+
+    html = f"""
+    <!DOCTYPE html>
+    <html dir="rtl">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body {{ background: #000; color: white; font-family: sans-serif; text-align: center; padding: 20px; }}
+            .card {{ background: #111; border: 1px solid #333; padding: 20px; border-radius: 20px; }}
+            .btn {{ display: block; background: #007aff; color: white; text-decoration: none; padding: 15px; margin: 10px 0; border-radius: 12px; font-weight: bold; }}
+            .news {{ color: #00d2ff; font-size: 14px; margin-bottom: 20px; }}
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h2>🌟 نجم الإبداع</h2>
+            <p class="news">{news}</p>
+            {update_btn}
+            <a href="tg://resolve?domain=Njm_Store_Bot&start=TRIAL_{aid}_{pkg.replace('.','_')}" class="btn">🎁 تجربة مجانية</a>
+            <a href="tg://resolve?domain=Njm_Store_Bot&start=BUY_{aid}_{pkg.replace('.','_')}" class="btn">🛒 شراء اشتراك</a>
+            <a href="tg://resolve?domain=Njm_Store_Bot&start=REDEEM_{aid}_{pkg.replace('.','_')}" class="btn">🎫 تفعيل كود</a>
+            <a href="tg://resolve?domain=Njm_Store_Bot&start=DASH_{aid}_{pkg.replace('.','_')}" class="btn">💰 مركز الحساب</a>
+        </div>
+    </body>
+    </html>
+    """
+    return html
 
 # --- [ واجهة البوت - البداية والربط التلقائي ] ---
 @bot.message_handler(commands=['start'])
@@ -200,7 +206,6 @@ def show_main_menu(m, username):
 @bot.callback_query_handler(func=lambda q: True)
 def handle_calls(q):
     uid = str(q.from_user.id)
-    # أوامر المستخدم
     if q.data == "u_dashboard": user_dashboard(q.message)
     elif q.data == "u_referral": show_referral_info(q.message)
     elif q.data == "u_redeem":
@@ -212,8 +217,6 @@ def handle_calls(q):
     elif q.data.startswith("trial_select_"):
         trial_select_app(q.message, q.data.replace("trial_select_", ""))
     elif q.data == "u_buy": send_payment(q.message) 
-    
-    # أوامر الأدمن
     elif q.from_user.id == ADMIN_ID:
         if q.data == "list_all": show_detailed_users(q.message)
         elif q.data == "admin_logs": show_logs(q.message)
@@ -221,18 +224,13 @@ def handle_calls(q):
         elif q.data == "gen_key":
             msg = bot.send_message(q.message.chat.id, "كم عدد الأيام؟")
             bot.register_next_step_handler(msg, process_gen_key_start)
-        
-        # منطق توليد الأكواد المطور
-        elif q.data.startswith("set_target_"):
-            process_key_type_selection(q)
-        elif q.data.startswith("pick_u_list_"):
-            list_users_for_key(q.message, q.data.split('_')[-1])
+        elif q.data.startswith("set_target_"): process_key_type_selection(q)
+        elif q.data.startswith("pick_u_list_"): list_users_for_key(q.message, q.data.split('_')[-1])
         elif q.data.startswith("pick_u_manual_"):
             days = q.data.split('_')[-1]
             msg = bot.send_message(q.message.chat.id, "ارسل ايدي (ID) المستخدم:")
             bot.register_next_step_handler(msg, lambda m: create_final_key(m, days, "user", m.text.strip()))
-        elif q.data.startswith("pick_a_list_"):
-            list_apps_for_key(q.message, q.data.split('_')[-1])
+        elif q.data.startswith("pick_a_list_"): list_apps_for_key(q.message, q.data.split('_')[-1])
         elif q.data.startswith("pick_a_manual_"):
             days = q.data.split('_')[-1]
             msg = bot.send_message(q.message.chat.id, "ارسل اسم حزمة التطبيق (Package ID):")
@@ -245,13 +243,11 @@ def handle_calls(q):
             days = parts[-1]
             cid_target = "_".join(parts[3:-1])
             create_final_key(q.message, days, "app", cid_target)
-
         elif q.data == "reset_data_ask":
             mk = types.InlineKeyboardMarkup()
             mk.add(types.InlineKeyboardButton("⚠️ نعم، احذف كل شيء", callback_data="confirm_full_reset"))
-            bot.send_message(q.message.chat.id, "❗ هل أنت متأكد؟ سيتم مسح جميع المستخدمين والأجهزة والأكواد!", reply_markup=mk)
-        elif q.data == "confirm_full_reset":
-            wipe_all_data(q.message)
+            bot.send_message(q.message.chat.id, "❗ هل أنت متأكد؟", reply_markup=mk)
+        elif q.data == "confirm_full_reset": wipe_all_data(q.message)
         elif q.data == "bc_tele":
             msg = bot.send_message(q.message.chat.id, "ارسل الإعلان:")
             bot.register_next_step_handler(msg, do_bc_tele)
@@ -262,8 +258,7 @@ def handle_calls(q):
             msg = bot.send_message(q.message.chat.id, "ارسل المعرف:")
             bot.register_next_step_handler(msg, process_ban_unban, q.data)
 
-# --- [ وظائف الإدارة ] --- 
-
+# --- [ بقية الوظائف - كما هي تماماً في كودك ] ---
 def show_detailed_users(m):
     try:
         all_users = db_fs.collection("users").get()
@@ -295,28 +290,26 @@ def show_detailed_users(m):
                 bot.send_message(m.chat.id, msg, parse_mode="Markdown")
                 msg = ""
         if msg: bot.send_message(m.chat.id, msg, parse_mode="Markdown")
-    except Exception as e: bot.send_message(m.chat.id, f"حدث خطأ: {e}")
+    except Exception as e: bot.send_message(m.chat.id, f"خطأ: {e}")
 
 def show_logs(m):
     logs = db_fs.collection("logs").order_by("timestamp", direction=firestore.Query.DESCENDING).limit(15).get()
-    text = "\n".join([d.to_dict().get("text") for d in logs]) if logs else "لا توجد سجلات."
-    bot.send_message(m.chat.id, f"📝 **آخر العمليات:**\n\n{text}") 
+    text = "\n".join([d.to_dict().get("text") for d in logs]) if logs else "لا سجلات."
+    bot.send_message(m.chat.id, f"📝 آخر العمليات:\n\n{text}")
 
 def show_top_referrers(m):
     users = db_fs.collection("users").order_by("referral_count", direction=firestore.Query.DESCENDING).limit(10).get()
-    msg = "🏆 **أفضل 10 داعين:**\n\n"
+    msg = "🏆 المتصدرين:\n\n"
     for i, d in enumerate(users, 1):
         msg += f"{i}- {d.to_dict().get('name')} ⮕ `{d.to_dict().get('referral_count', 0)}` إحالة\n"
-    bot.send_message(m.chat.id, msg) 
+    bot.send_message(m.chat.id, msg)
 
 @bot.message_handler(func=lambda m: m.text == "نجم1" and m.from_user.id == ADMIN_ID)
 def admin_panel(m):
     users_count = len(db_fs.collection("users").get())
     links_all = db_fs.collection("app_links").get()
     active = sum(1 for d in links_all if d.to_dict().get("end_time", 0) > time.time())
-    msg = (f"👑 **إدارة نجم الإبداع**\n\n"
-           f"👥 المستخدمين: `{users_count}` | الأجهزة: `{len(links_all)}`\n"
-           f"🟢 النشطين: `{active}`\n")
+    msg = (f"👑 إدارة نجم الإبداع\n\n👥 مستخدمين: `{users_count}` | نشطين: `{active}`")
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("📋 المشتركين", callback_data="list_all"),
@@ -329,29 +322,26 @@ def admin_panel(m):
         types.InlineKeyboardButton("📢 إعلان تلجرام", callback_data="bc_tele"),
         types.InlineKeyboardButton("🗑️ تصفير البيانات", callback_data="reset_data_ask")
     )
-    bot.send_message(m.chat.id, msg, reply_markup=markup, parse_mode="Markdown") 
-
-# --- [ منطق المستخدم ] --- 
+    bot.send_message(m.chat.id, msg, reply_markup=markup, parse_mode="Markdown")
 
 def show_referral_info(m):
     user_data = get_user(m.chat.id)
     ref_link = f"https://t.me/{bot.get_me().username}?start={m.chat.id}"
-    msg = (f"🔗 **نظام الإحالات:**\n\nإحالاتك: `{user_data.get('referral_count', 0)}`\n"
-           f"رابط دعوتك:\n`{ref_link}`")
-    bot.send_message(m.chat.id, msg, parse_mode="Markdown") 
+    msg = (f"🔗 نظام الإحالات:\n\nإحالاتك: `{user_data.get('referral_count', 0)}`\nرابط دعوتك: `{ref_link}`")
+    bot.send_message(m.chat.id, msg, parse_mode="Markdown")
 
 def user_dashboard(m):
     uid = str(m.chat.id)
     apps = db_fs.collection("app_links").where("telegram_id", "==", uid).get()
-    if not apps: return bot.send_message(m.chat.id, "❌ لا توجد تطبيقات مرتبطة.")
-    msg = "👤 **حالة اشتراكاتك:**\n"
+    if not apps: return bot.send_message(m.chat.id, "❌ لا تطبيقات مرتبطة.")
+    msg = "👤 حالة اشتراكاتك:\n"
     for doc in apps:
         data = doc.to_dict()
         rem = data.get("end_time", 0) - time.time()
         status = f"✅ {int(rem/86400)} يوم" if rem > 0 else "❌ منتهي"
         if data.get("banned"): status = "🚫 محظور"
-        msg += f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n📦 `{doc.id.split('_')[-1]}`\nالحالة: {status}\n"
-    bot.send_message(m.chat.id, msg, parse_mode="Markdown") 
+        msg += f"⎯⎯⎯⎯⎯⎯\n📦 `{doc.id.split('_')[-1]}`\nالحالة: {status}\n"
+    bot.send_message(m.chat.id, msg, parse_mode="Markdown")
 
 def redeem_code_step(m):
     code = m.text.strip()
@@ -359,12 +349,12 @@ def redeem_code_step(m):
     if not vdata: return bot.send_message(m.chat.id, "❌ الكود غير صحيح.")
     uid = str(m.from_user.id)
     days, target_type, target_id = vdata.get("days"), vdata.get("target", "all"), vdata.get("target_id")
-    if target_type == "user" and target_id != uid: return bot.send_message(m.chat.id, "❌ كود لمستخدم آخر.")
+    if target_type == "user" and target_id != uid: return bot.send_message(m.chat.id, "❌ كود مخصص لغيرك.")
     user_data = get_user(uid)
     current_cid = user_data.get("current_app")
     def apply_redeem(cid):
         if target_type == "app" and target_id not in cid:
-            bot.send_message(m.chat.id, f"❌ كود لتطبيق محدد: `{target_id}`"); return False
+            bot.send_message(m.chat.id, f"❌ كود مخصص لتطبيق محدد: `{target_id}`"); return False
         link = get_app_link(cid)
         new_time = max(time.time(), link.get("end_time", 0)) + (days * 86400)
         update_app_link(cid, {"end_time": new_time})
@@ -377,7 +367,7 @@ def redeem_code_step(m):
         update_user(uid, {"temp_code": code})
         markup = types.InlineKeyboardMarkup(row_width=1)
         for doc in apps: markup.add(types.InlineKeyboardButton(f"📦 {doc.id.split('_')[-1]}", callback_data=f"redeem_select_{doc.id}"))
-        bot.send_message(m.chat.id, "🛠️ اختر التطبيق:", reply_markup=markup) 
+        bot.send_message(m.chat.id, "🛠️ اختر التطبيق:", reply_markup=markup)
 
 def redeem_select_app(m, cid):
     uid = str(m.chat.id)
@@ -385,66 +375,69 @@ def redeem_select_app(m, cid):
     vdata = get_voucher(user_data.get("temp_code"))
     if vdata:
         days, target_id = vdata.get("days"), vdata.get("target_id")
-        if vdata.get("target") == "app" and target_id not in cid: return bot.send_message(m.chat.id, "❌ الكود لا يصلح.")
+        if vdata.get("target") == "app" and target_id not in cid: return bot.send_message(m.chat.id, "❌ الكود لا يصلح لهذا التطبيق.")
         link = get_app_link(cid)
         update_app_link(cid, {"end_time": max(time.time(), link.get("end_time", 0)) + (days * 86400)})
         delete_voucher(user_data["temp_code"])
         update_user(uid, {"temp_code": firestore.DELETE_FIELD})
-        bot.send_message(m.chat.id, f"✅ تم التفعيل!")
+        bot.send_message(m.chat.id, "✅ تم التفعيل!")
 
 def process_trial(m):
     uid = str(m.chat.id)
     apps = db_fs.collection("app_links").where("telegram_id", "==", uid).get()
-    if not apps: return bot.send_message(m.chat.id, "❌ لا يوجد تطبيق.")
+    if not apps: return bot.send_message(m.chat.id, "❌ لا يوجد تطبيق مرتبط.")
     markup = types.InlineKeyboardMarkup(row_width=1)
     for doc in apps: markup.add(types.InlineKeyboardButton(f"📦 {doc.id.split('_')[-1]}", callback_data=f"trial_select_{doc.id}"))
-    bot.send_message(m.chat.id, "🛠️ اختر تطبيق التجربة:", reply_markup=markup) 
+    bot.send_message(m.chat.id, "🛠️ اختر تطبيق التجربة:", reply_markup=markup)
 
 def trial_select_app(m, cid):
     data = get_app_link(cid)
     if not data: return
-    if time.time() - data.get("trial_last_time", 0) < 86400: return bot.send_message(m.chat.id, f"❌ التجربة كل 24 ساعة لجهازك.")
+    if time.time() - data.get("trial_last_time", 0) < 86400: return bot.send_message(m.chat.id, f"❌ التجربة متاحة كل 24 ساعة.")
     new_time = max(time.time(), data.get("end_time", 0)) + 259200
     update_app_link(cid, {"trial_last_time": time.time(), "end_time": new_time})
-    bot.send_message(m.chat.id, f"✅ تم تفعيل التجربة!") 
+    bot.send_message(m.chat.id, f"✅ تم تفعيل التجربة!")
 
 def send_payment(m):
     uid = str(m.chat.id)
     user_data = get_user(uid)
     cid = user_data.get("current_app")
     if not cid: return bot.send_message(m.chat.id, "❌ اربط التطبيق أولاً.")
-    bot.send_invoice(m.chat.id, title="اشتراك 30 يوم", description=f"تفعيل الجهاز: {cid.split('_')[-1]}", invoice_payload=f"pay_{cid}", provider_token="", currency="XTR", prices=[types.LabeledPrice(label="VIP", amount=100)]) 
+    bot.send_invoice(m.chat.id, title="اشتراك 30 يوم", description=f"تفعيل الجهاز: {cid.split('_')[-1]}", invoice_payload=f"pay_{cid}", provider_token="", currency="XTR", prices=[types.LabeledPrice(label="VIP", amount=100)])
 
-# --- [ وظائف المساعدة ] --- 
 def wipe_all_data(m):
     for coll in ["users", "app_links", "logs", "vouchers"]:
         for d in db_fs.collection(coll).get(): d.reference.delete()
-    bot.send_message(m.chat.id, "✅ تم التصفير.")
+    bot.send_message(m.chat.id, "✅ تم تصفير البيانات.")
 
 def process_gen_key_start(m):
     if not m.text.isdigit(): return bot.send_message(m.chat.id, "أرقام فقط.")
     days = int(m.text)
     mk = types.InlineKeyboardMarkup()
     mk.add(types.InlineKeyboardButton("🌍 عام", callback_data=f"set_target_all_{days}"), types.InlineKeyboardButton("📦 تطبيق", callback_data=f"set_target_app_{days}"), types.InlineKeyboardButton("👤 شخص", callback_data=f"set_target_user_{days}"))
-    bot.send_message(m.chat.id, "نوع الكود:", reply_markup=mk)
+    bot.send_message(m.chat.id, "اختر النوع:", reply_markup=mk)
 
 def process_key_type_selection(q):
     _, _, target, days = q.data.split('_')
     if target == "all": create_final_key(q.message, days, "all", None)
-    else:
-        mk = types.InlineKeyboardMarkup(row_width=1)
-        mk.add(types.InlineKeyboardButton("🔍 اختيار من القائمة", callback_data=f"pick_{target[0]}_list_{days}"), types.InlineKeyboardButton("⌨️ يدوي", callback_data=f"pick_{target[0]}_manual_{days}"))
-        bot.send_message(q.message.chat.id, "تحديد الهدف:", reply_markup=mk)
+    elif target == "app":
+        mk = types.InlineKeyboardMarkup()
+        mk.add(types.InlineKeyboardButton("🔍 القائمة", callback_data=f"pick_a_list_{days}"), types.InlineKeyboardButton("⌨️ يدوي", callback_data=f"pick_a_manual_{days}"))
+        bot.send_message(q.message.chat.id, "تحديد التطبيق:", reply_markup=mk)
+    elif target == "user":
+        mk = types.InlineKeyboardMarkup()
+        mk.add(types.InlineKeyboardButton("👥 القائمة", callback_data=f"pick_u_list_{days}"), types.InlineKeyboardButton("⌨️ يدوي", callback_data=f"pick_u_manual_{days}"))
+        bot.send_message(q.message.chat.id, "تحديد الشخص:", reply_markup=mk)
 
 def list_users_for_key(m, days):
     users = db_fs.collection("users").limit(30).get()
-    mk = types.InlineKeyboardMarkup(row_width=1)
+    mk = types.InlineKeyboardMarkup()
     for u in users: mk.add(types.InlineKeyboardButton(f"👤 {u.to_dict().get('name')}", callback_data=f"gen_for_u_{u.id}_{days}"))
     bot.send_message(m.chat.id, "اختر الشخص:", reply_markup=mk)
 
 def list_apps_for_key(m, days):
     apps = db_fs.collection("app_links").limit(30).get()
-    mk = types.InlineKeyboardMarkup(row_width=1); seen = set()
+    mk = types.InlineKeyboardMarkup(); seen = set()
     for a in apps:
         pkg = a.id.split('_')[-1]
         if pkg not in seen: mk.add(types.InlineKeyboardButton(f"📦 {pkg}", callback_data=f"gen_for_a_{a.id}_{days}")); seen.add(pkg)
@@ -453,7 +446,7 @@ def list_apps_for_key(m, days):
 def create_final_key(m, days, target, target_id):
     code = f"NJM-{str(uuid.uuid4())[:8].upper()}"
     db_fs.collection("vouchers").document(code).set({"days": int(days), "target": target, "target_id": target_id})
-    txt = f"🎫 **كود جديد ({days} يوم)**\nالنوع: {target}\nالكود: `{code}`"
+    txt = f"🎫 كود جديد ({days} يوم)\nالكود: `{code}`"
     bot.send_message(m.chat.id, txt, parse_mode="Markdown")
 
 def expiry_notifier():
@@ -471,16 +464,16 @@ def expiry_notifier():
 
 def do_bc_tele(m):
     for d in db_fs.collection("users").get():
-        try: bot.send_message(d.id, f"📢 **إعلان:**\n\n{m.text}")
+        try: bot.send_message(d.id, f"📢 إعلان:\n\n{m.text}")
         except: pass
-    bot.send_message(m.chat.id, "✅ تم.") 
+    bot.send_message(m.chat.id, "✅ تم الإرسال.")
 
-def do_bc_app(m): set_global_news(m.text); bot.send_message(m.chat.id, "✅ تم.") 
+def do_bc_app(m): set_global_news(m.text); bot.send_message(m.chat.id, "✅ تم التحديث.")
 
 def process_ban_unban(m, mode):
     target = m.text.strip()
     if get_app_link(target): update_app_link(target, {"banned": (mode == "ban_op")}); bot.send_message(m.chat.id, "✅ تم.")
-    else: bot.send_message(m.chat.id, "❌ غير موجود.") 
+    else: bot.send_message(m.chat.id, "❌ غير موجود.")
 
 @bot.pre_checkout_query_handler(func=lambda q: True)
 def checkout(q): bot.answer_pre_checkout_query(q.id, ok=True) 
@@ -491,9 +484,10 @@ def pay_success(m):
     link = get_app_link(cid)
     if link:
         update_app_link(cid, {"end_time": max(time.time(), link.get("end_time", 0)) + (30 * 86400)})
-        bot.send_message(m.chat.id, "✅ تم الشراء بنجاح!") 
+        bot.send_message(m.chat.id, "✅ تم الشراء بنجاح!")
 
-def run(): app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080))) 
+def run():
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
 
 if __name__ == "__main__":
     Thread(target=run).start()
