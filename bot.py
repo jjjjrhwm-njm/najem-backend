@@ -1,7 +1,7 @@
 import telebot
 from telebot import types
 from flask import Flask, request
-import json, os, time, uuid
+import json, os, time, uuid, re
 from threading import Thread
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -189,7 +189,7 @@ def handle_calls(q):
             msg = bot.send_message(q.message.chat.id, "كم عدد الأيام؟")
             bot.register_next_step_handler(msg, process_gen_key_start)
         
-        # --- ميزة رفع تطبيق جديد بالقناة ---
+        # --- ميزة رفع تطبيق جديد للقناة ---
         elif q.data == "admin_upload_app":
             msg = bot.send_message(q.message.chat.id, "🖼️ أرسل **صورة** التطبيق الآن:")
             bot.register_next_step_handler(msg, process_upload_photo)
@@ -347,7 +347,7 @@ def admin_panel(m):
     )
     bot.send_message(m.chat.id, msg, reply_markup=markup, parse_mode="Markdown") 
 
-# --- [ وظائف الرفع والنشر الاحترافي ] ---
+# --- [ وظائف الرفع والنشر الاحترافي المعدلة ] ---
 
 def process_upload_photo(m):
     if not m.photo:
@@ -368,34 +368,31 @@ def process_upload_desc(m):
     if uid not in upload_cache or not m.text:
         return bot.send_message(m.chat.id, "❌ حدث خطأ، حاول مجدداً.")
     
-    # اللمسة السحرية والزخرفة للوصف
     user_desc = m.text
+    # جعل الأكواد التي تبدأ بـ NJM- قابلة للنسخ تلقائياً
+    # يبحث الكود عن أي نص يشبه NJM-XXXXXX ويضعه بين ` ليكون قابلاً للنسخ
+    formatted_user_desc = re.sub(r'(NJM-[A-Z0-9]+)', r'`\1`', user_desc)
+
     decorated_desc = (
         f"🌟 **نجم الإبداع يقدم لكم** 🌟\n\n"
-        f"🚀 **{user_desc}**\n\n"
+        f"🚀 **{formatted_user_desc}**\n\n"
         f"✅ **الحالة:** شغال وآمن 🛡️\n"
         f"✨ **الميزة:** نسخة حصرية مطورة\n"
         f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-        f"📥 **حمل الآن واستمتع بالتجربة!**"
+        f"📥 **حمل الملف المرفق أعلاه واستمتع!**"
     )
     
     photo = upload_cache[uid]["photo"]
     file_id = upload_cache[uid]["file"]
     
     try:
-        # 1. إرسال ملف الـ APK أولاً (بصمت) ليكون التمرير إليه سلساً
-        file_msg = bot.send_document(CHANNEL_ID, file_id, disable_notification=True)
+        # 1. إرسال ملف الـ APK أولاً 
+        bot.send_document(CHANNEL_ID, file_id)
         
-        # 2. إنشاء رابط الرسالة الداخلي لتجنب "القفزة الجارحة"
-        file_link = f"https://t.me/jrhwm0njm/{file_msg.message_id}"
+        # 2. إرسال الصورة مع الوصف (تم حذف الزر كما طلبت)
+        bot.send_photo(CHANNEL_ID, photo, caption=decorated_desc, parse_mode="Markdown")
         
-        # 3. إنشاء الزر الشفاف وتنسيق المنشور (صورة -> وصف -> زر)
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("📥 تنزيل التطبيق الآن", url=file_link))
-        
-        bot.send_photo(CHANNEL_ID, photo, caption=decorated_desc, reply_markup=markup, parse_mode="Markdown")
-        
-        bot.send_message(m.chat.id, "✅ تم النشر باحترافية وسلاسة في القناة!")
+        bot.send_message(m.chat.id, "✅ تم النشر باحترافية في القناة (بدون زر وبوصف مطور)!")
         del upload_cache[uid]
     except Exception as e:
         bot.send_message(m.chat.id, f"❌ خطأ أثناء النشر: {e}")
