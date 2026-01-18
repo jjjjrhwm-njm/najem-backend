@@ -189,7 +189,7 @@ def handle_calls(q):
             msg = bot.send_message(q.message.chat.id, "كم عدد الأيام؟")
             bot.register_next_step_handler(msg, process_gen_key_start)
         
-        # ميزة رفع تطبيق جديد
+        # --- ميزة رفع تطبيق جديد بالقناة ---
         elif q.data == "admin_upload_app":
             msg = bot.send_message(q.message.chat.id, "🖼️ أرسل **صورة** التطبيق الآن:")
             bot.register_next_step_handler(msg, process_upload_photo)
@@ -350,36 +350,46 @@ def admin_panel(m):
 # --- [ وظائف الرفع والنشر الاحترافي ] ---
 
 def process_upload_photo(m):
-    if not m.photo: return bot.send_message(m.chat.id, "❌ أرسل صورة فقط.")
+    if not m.photo:
+        return bot.send_message(m.chat.id, "❌ يرجى إرسال صورة صحيحة.")
     upload_cache[m.from_user.id] = {"photo": m.photo[-1].file_id}
     msg = bot.send_message(m.chat.id, "📂 الآن أرسل **ملف التطبيق (APK)**:")
     bot.register_next_step_handler(msg, process_upload_file)
 
 def process_upload_file(m):
-    if not m.document: return bot.send_message(m.chat.id, "❌ أرسل ملف APK فقط.")
+    if not m.document:
+        return bot.send_message(m.chat.id, "❌ يرجى إرسال ملف APK.")
     upload_cache[m.from_user.id]["file"] = m.document.file_id
     msg = bot.send_message(m.chat.id, "✍️ أرسل **وصف التطبيق**:")
     bot.register_next_step_handler(msg, process_upload_desc)
 
 def process_upload_desc(m):
     uid = m.from_user.id
-    if uid not in upload_cache or not m.text: return
+    if uid not in upload_cache or not m.text:
+        return bot.send_message(m.chat.id, "❌ حدث خطأ، حاول مجدداً.")
     
-    # تنسيق الوصف بلمسات براند "نجم الإبداع"
-    raw_desc = m.text
-    decorated_desc = f"🚀 **{raw_desc}**\n\n✅ فحص الأمان: سليم 100%\n✨ حصرياً لدى نجم الإبداع\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯"
+    # اللمسة السحرية والزخرفة للوصف
+    user_desc = m.text
+    decorated_desc = (
+        f"🌟 **نجم الإبداع يقدم لكم** 🌟\n\n"
+        f"🚀 **{user_desc}**\n\n"
+        f"✅ **الحالة:** شغال وآمن 🛡️\n"
+        f"✨ **الميزة:** نسخة حصرية مطورة\n"
+        f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+        f"📥 **حمل الآن واستمتع بالتجربة!**"
+    )
     
     photo = upload_cache[uid]["photo"]
     file_id = upload_cache[uid]["file"]
     
     try:
-        # 1. إرسال الملف "صامتاً" لضمان سلاسة حركة التمرير للأعلى لاحقاً
+        # 1. إرسال ملف الـ APK أولاً (بصمت) ليكون التمرير إليه سلساً
         file_msg = bot.send_document(CHANNEL_ID, file_id, disable_notification=True)
         
         # 2. إنشاء رابط الرسالة الداخلي لتجنب "القفزة الجارحة"
         file_link = f"https://t.me/jrhwm0njm/{file_msg.message_id}"
         
-        # 3. إرسال الصورة مع الوصف والزر (الترتيب: صورة -> وصف -> زر)
+        # 3. إنشاء الزر الشفاف وتنسيق المنشور (صورة -> وصف -> زر)
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("📥 تنزيل التطبيق الآن", url=file_link))
         
@@ -524,7 +534,7 @@ def process_key_type_selection(q):
         mk = types.InlineKeyboardMarkup(row_width=1)
         mk.add(types.InlineKeyboardButton("🔍 عرض التطبيقات للاختيار", callback_data=f"pick_a_list_{days}"),
                types.InlineKeyboardButton("⌨️ ارسل اسم التطبيق يدوياً", callback_data=f"pick_a_manual_{days}"))
-        bot.send_message(q.message.chat.id, "كيف تريد تحديد التطبيق؟", reply_markup=mk)
+        bot.send_message(q.message.chat.id, "كيف تريد تحديد التطبيق?.", reply_markup=mk)
     elif target == "user":
         mk = types.InlineKeyboardMarkup(row_width=1)
         mk.add(types.InlineKeyboardButton("👥 عرض المستخدمين للاختيار", callback_data=f"pick_u_list_{days}"),
