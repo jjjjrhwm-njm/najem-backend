@@ -189,7 +189,7 @@ def handle_calls(q):
             msg = bot.send_message(q.message.chat.id, "كم عدد الأيام؟")
             bot.register_next_step_handler(msg, process_gen_key_start)
         
-        # --- [ ميزة رفع تطبيق جديد بالقناة ] ---
+        # --- ميزة النشر الجديدة ---
         elif q.data == "admin_upload_app":
             msg = bot.send_message(q.message.chat.id, "🖼️ أرسل **صورة** التطبيق الآن:")
             bot.register_next_step_handler(msg, process_upload_photo)
@@ -213,7 +213,6 @@ def handle_calls(q):
             _, _, _, uid_target, days = q.data.split('_')
             create_final_key(q.message, days, "user", uid_target)
         elif q.data.startswith("gen_for_a_"):
-            # التعامل مع CID الذي قد يحتوي على شرطة سفلية
             parts = q.data.split('_')
             days = parts[-1]
             cid_target = "_".join(parts[3:-1])
@@ -232,7 +231,6 @@ def handle_calls(q):
             msg = bot.send_message(q.message.chat.id, "ارسل الخبر:")
             bot.register_next_step_handler(msg, do_bc_app)
         
-        # --- [ تعديل أزرار الحظر وفك الحظر ] ---
         elif q.data in ["ban_op", "unban_op"]:
             m_type = "الحظر" if q.data == "ban_op" else "فك الحظر"
             mk = types.InlineKeyboardMarkup(row_width=1)
@@ -340,14 +338,56 @@ def admin_panel(m):
         types.InlineKeyboardButton("📝 السجلات", callback_data="admin_logs"),
         types.InlineKeyboardButton("🏆 المتصدرين", callback_data="top_ref"),
         types.InlineKeyboardButton("🎫 كود جديد", callback_data="gen_key"),
+        types.InlineKeyboardButton("📤 نشر تطبيق بالقناة", callback_data="admin_upload_app"),
         types.InlineKeyboardButton("🚫 حظر", callback_data="ban_op"),
         types.InlineKeyboardButton("✅ فك حظر", callback_data="unban_op"),
-        types.InlineKeyboardButton("📤 نشر تطبيق بالقناة", callback_data="admin_upload_app"), # زر جديد
         types.InlineKeyboardButton("📢 إعلان التطبيق", callback_data="bc_app"),
         types.InlineKeyboardButton("📢 إعلان تلجرام", callback_data="bc_tele"),
         types.InlineKeyboardButton("🗑️ تصفير البيانات", callback_data="reset_data_ask")
     )
     bot.send_message(m.chat.id, msg, reply_markup=markup, parse_mode="Markdown") 
+
+# --- [ وظائف النشر الاحترافي الجديدة ] ---
+
+def process_upload_photo(m):
+    if not m.photo: return bot.send_message(m.chat.id, "❌ أرسل صورة فقط.")
+    upload_cache[m.from_user.id] = {"photo": m.photo[-1].file_id}
+    msg = bot.send_message(m.chat.id, "📂 الآن أرسل **ملف التطبيق (APK)**:")
+    bot.register_next_step_handler(msg, process_upload_file)
+
+def process_upload_file(m):
+    if not m.document: return bot.send_message(m.chat.id, "❌ أرسل ملف APK فقط.")
+    upload_cache[m.from_user.id]["file"] = m.document.file_id
+    msg = bot.send_message(m.chat.id, "✍️ أرسل **وصف التطبيق**:")
+    bot.register_next_step_handler(msg, process_upload_desc)
+
+def process_upload_desc(m):
+    uid = m.from_user.id
+    if uid not in upload_cache or not m.text: return bot.send_message(m.chat.id, "❌ خطأ في البيانات.")
+    
+    desc = m.text
+    photo = upload_cache[uid]["photo"]
+    file_id = upload_cache[uid]["file"]
+    
+    try:
+        # 1. إرسال الملف للقناة أولاً
+        file_msg = bot.send_document(CHANNEL_ID, file_id)
+        
+        # 2. إنشاء رابط الملف المباشر داخل القناة
+        # يتم استخدام اسم القناة من الرابط الذي قدمته jrhwm0njm
+        file_link = f"https://t.me/jrhwm0njm/{file_msg.message_id}"
+        
+        # 3. إنشاء الزر الشفاف
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("📥 تحميل التطبيق الآن", url=file_link))
+        
+        # 4. إرسال الصورة مع الوصف والزر
+        bot.send_photo(CHANNEL_ID, photo, caption=desc, reply_markup=markup, parse_mode="Markdown")
+        
+        bot.send_message(m.chat.id, "✅ تم النشر باحترافية (صورة + وصف + زر تحميل)!")
+        del upload_cache[uid]
+    except Exception as e:
+        bot.send_message(m.chat.id, f"❌ حدث خطأ أثناء النشر: {e}")
 
 # --- [ منطق المستخدم ] --- 
 
@@ -457,42 +497,6 @@ def send_payment(m):
                      invoice_payload=f"pay_{cid}", provider_token="", currency="XTR",
                      prices=[types.LabeledPrice(label="VIP", amount=100)]) 
 
-# --- [ وظائف الرفع الجديدة ] ---
-
-def process_upload_photo(m):
-    if not m.photo:
-        return bot.send_message(m.chat.id, "❌ يرجى إرسال صورة صحيحة.")
-    upload_cache[m.from_user.id] = {"photo": m.photo[-1].file_id}
-    msg = bot.send_message(m.chat.id, "📂 الآن أرسل **ملف التطبيق (APK)**:")
-    bot.register_next_step_handler(msg, process_upload_file)
-
-def process_upload_file(m):
-    if not m.document:
-        return bot.send_message(m.chat.id, "❌ يرجى إرسال ملف APK.")
-    upload_cache[m.from_user.id]["file"] = m.document.file_id
-    msg = bot.send_message(m.chat.id, "✍️ أرسل **وصف التطبيق** (النص الذي سيظهر مع الصورة):")
-    bot.register_next_step_handler(msg, process_upload_desc)
-
-def process_upload_desc(m):
-    uid = m.from_user.id
-    if uid not in upload_cache or not m.text:
-        return bot.send_message(m.chat.id, "❌ حدث خطأ، حاول مجدداً.")
-    
-    desc = m.text
-    photo = upload_cache[uid]["photo"]
-    file_id = upload_cache[uid]["file"]
-    
-    try:
-        # 1. إرسال الصورة مع الوصف
-        bot.send_photo(CHANNEL_ID, photo, caption=desc, parse_mode="Markdown")
-        # 2. إرسال ملف الـ APK مباشرة بعدها
-        bot.send_document(CHANNEL_ID, file_id)
-        
-        bot.send_message(m.chat.id, "✅ تم نشر التطبيق بنجاح في القناة!")
-        del upload_cache[uid]
-    except Exception as e:
-        bot.send_message(m.chat.id, f"❌ خطأ أثناء النشر: {e}")
-
 # --- [ خيوط الخلفية ووظائف المساعدة ] --- 
 
 def wipe_all_data(m):
@@ -533,7 +537,7 @@ def list_users_for_key(m, days):
     for u in users:
         ud = u.to_dict()
         mk.add(types.InlineKeyboardButton(f"👤 {ud.get('name')} ({u.id})", callback_data=f"gen_for_u_{u.id}_{days}"))
-    bot.send_message(m.chat.id, "اختر المستخدم:", reply_markup=mk)
+    bot.send_message(m.chat.id, "اختر المستخدم:")
 
 def list_apps_for_key(m, days):
     apps = db_fs.collection("app_links").limit(30).get()
