@@ -189,7 +189,7 @@ def handle_calls(q):
             msg = bot.send_message(q.message.chat.id, "كم عدد الأيام؟")
             bot.register_next_step_handler(msg, process_gen_key_start)
         
-        # ميزة النشر (الإضافة المطلوبة)
+        # ميزة رفع تطبيق جديد
         elif q.data == "admin_upload_app":
             msg = bot.send_message(q.message.chat.id, "🖼️ أرسل **صورة** التطبيق الآن:")
             bot.register_next_step_handler(msg, process_upload_photo)
@@ -338,25 +338,25 @@ def admin_panel(m):
         types.InlineKeyboardButton("📝 السجلات", callback_data="admin_logs"),
         types.InlineKeyboardButton("🏆 المتصدرين", callback_data="top_ref"),
         types.InlineKeyboardButton("🎫 كود جديد", callback_data="gen_key"),
+        types.InlineKeyboardButton("📤 نشر تطبيق بالقناة", callback_data="admin_upload_app"),
         types.InlineKeyboardButton("🚫 حظر", callback_data="ban_op"),
         types.InlineKeyboardButton("✅ فك حظر", callback_data="unban_op"),
-        types.InlineKeyboardButton("📤 نشر تطبيق بالقناة", callback_data="admin_upload_app"), # زر النشر
         types.InlineKeyboardButton("📢 إعلان التطبيق", callback_data="bc_app"),
         types.InlineKeyboardButton("📢 إعلان تلجرام", callback_data="bc_tele"),
         types.InlineKeyboardButton("🗑️ تصفير البيانات", callback_data="reset_data_ask")
     )
     bot.send_message(m.chat.id, msg, reply_markup=markup, parse_mode="Markdown") 
 
-# --- [ وظائف النشر السلس ] ---
+# --- [ وظائف الرفع والنشر الاحترافي ] ---
 
 def process_upload_photo(m):
-    if not m.photo: return bot.send_message(m.chat.id, "❌ أرسل صورة.")
+    if not m.photo: return bot.send_message(m.chat.id, "❌ أرسل صورة فقط.")
     upload_cache[m.from_user.id] = {"photo": m.photo[-1].file_id}
     msg = bot.send_message(m.chat.id, "📂 الآن أرسل **ملف التطبيق (APK)**:")
     bot.register_next_step_handler(msg, process_upload_file)
 
 def process_upload_file(m):
-    if not m.document: return bot.send_message(m.chat.id, "❌ أرسل ملف APK.")
+    if not m.document: return bot.send_message(m.chat.id, "❌ أرسل ملف APK فقط.")
     upload_cache[m.from_user.id]["file"] = m.document.file_id
     msg = bot.send_message(m.chat.id, "✍️ أرسل **وصف التطبيق**:")
     bot.register_next_step_handler(msg, process_upload_desc)
@@ -365,31 +365,30 @@ def process_upload_desc(m):
     uid = m.from_user.id
     if uid not in upload_cache or not m.text: return
     
-    # تزيين الوصف بالملصقات ليكون احترافياً
+    # تنسيق الوصف بلمسات براند "نجم الإبداع"
     raw_desc = m.text
-    decorated_desc = f"🚀 **{raw_desc}**\n\n✅ تم الفحص: آمن تماماً\n✨ حصرياً في نجم الإبداع\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯"
+    decorated_desc = f"🚀 **{raw_desc}**\n\n✅ فحص الأمان: سليم 100%\n✨ حصرياً لدى نجم الإبداع\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯"
     
     photo = upload_cache[uid]["photo"]
     file_id = upload_cache[uid]["file"]
     
     try:
-        # 1. إرسال الملف "بصمت" أولاً ليكون فوق المنشور مباشرة
-        # هكذا عندما يضغط المشترك على الزر، سينتقل للأعلى بسلاسة تامة (بدون وميض)
+        # 1. إرسال الملف "صامتاً" لضمان سلاسة حركة التمرير للأعلى لاحقاً
         file_msg = bot.send_document(CHANNEL_ID, file_id, disable_notification=True)
         
-        # 2. إنشاء رابط الرسالة الداخلي
+        # 2. إنشاء رابط الرسالة الداخلي لتجنب "القفزة الجارحة"
         file_link = f"https://t.me/jrhwm0njm/{file_msg.message_id}"
         
-        # 3. إنشاء الزر وتنسيق المنشور بالترتيب: صورة -> وصف -> زر
+        # 3. إرسال الصورة مع الوصف والزر (الترتيب: صورة -> وصف -> زر)
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("📥 تنزيل التطبيق الآن", url=file_link))
         
         bot.send_photo(CHANNEL_ID, photo, caption=decorated_desc, reply_markup=markup, parse_mode="Markdown")
         
-        bot.send_message(m.chat.id, "✅ تم النشر بنجاح وبسلاسة تامة!")
+        bot.send_message(m.chat.id, "✅ تم النشر باحترافية وسلاسة في القناة!")
         del upload_cache[uid]
     except Exception as e:
-        bot.send_message(m.chat.id, f"❌ حدث خطأ أثناء النشر: {e}")
+        bot.send_message(m.chat.id, f"❌ خطأ أثناء النشر: {e}")
 
 # --- [ منطق المستخدم ] --- 
 
