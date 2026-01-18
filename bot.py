@@ -189,9 +189,9 @@ def handle_calls(q):
             msg = bot.send_message(q.message.chat.id, "كم عدد الأيام؟")
             bot.register_next_step_handler(msg, process_gen_key_start)
         
-        # --- ميزة النشر الجديدة ---
+        # ميزة النشر في فقاعة واحدة
         elif q.data == "admin_upload_app":
-            msg = bot.send_message(q.message.chat.id, "🖼️ أرسل **صورة** التطبيق الآن:")
+            msg = bot.send_message(q.message.chat.id, "🖼️ أرسل **صورة** التطبيق (ستظهر كمصغّر):")
             bot.register_next_step_handler(msg, process_upload_photo)
 
         # منطق توليد الأكواد المطور
@@ -347,7 +347,7 @@ def admin_panel(m):
     )
     bot.send_message(m.chat.id, msg, reply_markup=markup, parse_mode="Markdown") 
 
-# --- [ وظائف النشر الاحترافي الجديدة ] ---
+# --- [ وظائف النشر في فقاعة واحدة ] ---
 
 def process_upload_photo(m):
     if not m.photo: return bot.send_message(m.chat.id, "❌ أرسل صورة فقط.")
@@ -359,35 +359,23 @@ def process_upload_file(m):
     if not m.document: return bot.send_message(m.chat.id, "❌ أرسل ملف APK فقط.")
     upload_cache[m.from_user.id]["file"] = m.document.file_id
     msg = bot.send_message(m.chat.id, "✍️ أرسل **وصف التطبيق**:")
-    bot.register_next_step_handler(msg, process_upload_desc)
+    bot.register_next_step_handler(msg, process_upload_one_bubble)
 
-def process_upload_desc(m):
+def process_upload_one_bubble(m):
     uid = m.from_user.id
-    if uid not in upload_cache or not m.text: return bot.send_message(m.chat.id, "❌ خطأ في البيانات.")
+    if uid not in upload_cache or not m.text: return bot.send_message(m.chat.id, "❌ حدث خطأ.")
     
     desc = m.text
     photo = upload_cache[uid]["photo"]
     file_id = upload_cache[uid]["file"]
     
     try:
-        # 1. إرسال الملف للقناة أولاً
-        file_msg = bot.send_document(CHANNEL_ID, file_id)
-        
-        # 2. إنشاء رابط الملف المباشر داخل القناة
-        # يتم استخدام اسم القناة من الرابط الذي قدمته jrhwm0njm
-        file_link = f"https://t.me/jrhwm0njm/{file_msg.message_id}"
-        
-        # 3. إنشاء الزر الشفاف
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("📥 تحميل التطبيق الآن", url=file_link))
-        
-        # 4. إرسال الصورة مع الوصف والزر
-        bot.send_photo(CHANNEL_ID, photo, caption=desc, reply_markup=markup, parse_mode="Markdown")
-        
-        bot.send_message(m.chat.id, "✅ تم النشر باحترافية (صورة + وصف + زر تحميل)!")
+        # النشر في فقاعة واحدة: دمج الملف مع الصورة كـ Thumb والوصف كـ Caption
+        bot.send_document(CHANNEL_ID, file_id, caption=desc, thumb=photo, parse_mode="Markdown")
+        bot.send_message(m.chat.id, "✅ تم نشر التطبيق في فقاعة واحدة بنجاح!")
         del upload_cache[uid]
     except Exception as e:
-        bot.send_message(m.chat.id, f"❌ حدث خطأ أثناء النشر: {e}")
+        bot.send_message(m.chat.id, f"❌ خطأ أثناء النشر: {e}")
 
 # --- [ منطق المستخدم ] --- 
 
@@ -537,7 +525,7 @@ def list_users_for_key(m, days):
     for u in users:
         ud = u.to_dict()
         mk.add(types.InlineKeyboardButton(f"👤 {ud.get('name')} ({u.id})", callback_data=f"gen_for_u_{u.id}_{days}"))
-    bot.send_message(m.chat.id, "اختر المستخدم:")
+    bot.send_message(m.chat.id, "اختر المستخدم:", reply_markup=mk)
 
 def list_apps_for_key(m, days):
     apps = db_fs.collection("app_links").limit(30).get()
