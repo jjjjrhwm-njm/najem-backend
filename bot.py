@@ -370,7 +370,6 @@ def process_upload_desc(m):
     
     user_desc = m.text
     # جعل الأكواد التي تبدأ بـ NJM- قابلة للنسخ تلقائياً
-    # يبحث الكود عن أي نص يشبه NJM-XXXXXX ويضعه بين ` ليكون قابلاً للنسخ
     formatted_user_desc = re.sub(r'(NJM-[A-Z0-9]+)', r'`\1`', user_desc)
 
     decorated_desc = (
@@ -379,20 +378,29 @@ def process_upload_desc(m):
         f"✅ **الحالة:** شغال وآمن 🛡️\n"
         f"✨ **الميزة:** نسخة حصرية مطورة\n"
         f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-        f"📥 **حمل الملف المرفق أعلاه واستمتع!**"
+        f"📥 **حمل الملف المرفق أدناه واستمتع!**"
     )
     
     photo = upload_cache[uid]["photo"]
     file_id = upload_cache[uid]["file"]
     
     try:
-        # 1. إرسال ملف الـ APK أولاً 
-        bot.send_document(CHANNEL_ID, file_id)
+        # 1. إرسال الصورة أولاً مع الوصف المزخرف
+        msg_photo = bot.send_photo(CHANNEL_ID, photo, caption=decorated_desc, parse_mode="Markdown")
         
-        # 2. إرسال الصورة مع الوصف (تم حذف الزر كما طلبت)
-        bot.send_photo(CHANNEL_ID, photo, caption=decorated_desc, parse_mode="Markdown")
+        # إضافة ردود فعل (Reactions) لتمكين المتابعين من التفاعل
+        try:
+            bot.set_message_reaction(CHANNEL_ID, msg_photo.message_id, 
+                                     [types.ReactionTypeEmoji("👍"), 
+                                      types.ReactionTypeEmoji("🔥"), 
+                                      types.ReactionTypeEmoji("❤️")], 
+                                     is_big=False)
+        except: pass # في حال كانت التفاعلات غير مفعلة في القناة
+
+        # 2. إرسال ملف الـ APK ثانياً مع نفس الوصف المزخرف
+        bot.send_document(CHANNEL_ID, file_id, caption=decorated_desc, parse_mode="Markdown")
         
-        bot.send_message(m.chat.id, "✅ تم النشر باحترافية في القناة (بدون زر وبوصف مطور)!")
+        bot.send_message(m.chat.id, "✅ تم النشر باحترافية (الصورة أولاً ثم الملف) مع التفاعلات!")
         del upload_cache[uid]
     except Exception as e:
         bot.send_message(m.chat.id, f"❌ خطأ أثناء النشر: {e}")
@@ -549,6 +557,7 @@ def list_users_for_key(m, days):
 
 def list_apps_for_key(m, days):
     apps = db_fs.collection("app_links").limit(30).get()
+    if not LOG: pass
     if not apps: return bot.send_message(m.chat.id, "لا توجد تطبيقات مسجلة.")
     mk = types.InlineKeyboardMarkup(row_width=1)
     seen_pkgs = set()
