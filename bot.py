@@ -368,39 +368,45 @@ def process_upload_desc(m):
     if uid not in upload_cache or not m.text:
         return bot.send_message(m.chat.id, "❌ حدث خطأ، حاول مجدداً.")
     
-    user_desc = m.text
-    # جعل الأكواد التي تبدأ بـ NJM- قابلة للنسخ تلقائياً
-    formatted_user_desc = re.sub(r'(NJM-[A-Z0-9]+)', r'`\1`', user_desc)
+    # --- [ المنطق الذكي لتنسيق الوصف ] ---
+    raw_desc = m.text
+    # 1. زخرفة الأرقام (المميزات) تلقائياً
+    # يبحث عن الأرقام في بداية السطور ويضع بجانبها رموز ✨ ويجعل الرقم عريضاً
+    smart_desc = re.sub(r'^(\d+[\.\-\)]?\s*)', r'✨ **\1**', raw_desc, flags=re.MULTILINE)
+    
+    # 2. جعل الأكواد قابلة للنسخ
+    smart_desc = re.sub(r'(NJM-[A-Z0-9]+)', r'`\1`', smart_desc)
 
+    # 3. بناء القالب النهائي
     decorated_desc = (
         f"🌟 **نجم الإبداع يقدم لكم** 🌟\n\n"
-        f"🚀 **{formatted_user_desc}**\n\n"
-        f"✅ **الحالة:** شغال وآمن 🛡️\n"
-        f"✨ **الميزة:** نسخة حصرية مطورة\n"
+        f"🚀 {smart_desc}\n\n"
+        f"🛡️ **الحالة:** شغال وآمن تماماً\n"
         f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-        f"📥 **حمل الملف المرفق أدناه واستمتع!**"
+        f"👇 **حمل التطبيق من الملف أدناه مباشرة**"
     )
     
     photo = upload_cache[uid]["photo"]
     file_id = upload_cache[uid]["file"]
     
     try:
-        # 1. إرسال الصورة أولاً مع الوصف المزخرف
-        msg_photo = bot.send_photo(CHANNEL_ID, photo, caption=decorated_desc, parse_mode="Markdown")
+        # 1. إرسال الصورة أولاً مع الوصف الذكي
+        bot.send_photo(CHANNEL_ID, photo, caption=decorated_desc, parse_mode="Markdown")
         
-        # إضافة ردود فعل (Reactions) لتمكين المتابعين من التفاعل
+        # 2. إرسال ملف الـ APK ثانياً (بدون وصف كما طلبت)
+        msg_file = bot.send_document(CHANNEL_ID, file_id)
+        
+        # 3. إضافة ردود الفعل (Reactions) تحت ملف التطبيق مباشرة
         try:
-            bot.set_message_reaction(CHANNEL_ID, msg_photo.message_id, 
-                                     [types.ReactionTypeEmoji("👍"), 
-                                      types.ReactionTypeEmoji("🔥"), 
-                                      types.ReactionTypeEmoji("❤️")], 
+            bot.set_message_reaction(CHANNEL_ID, msg_file.message_id, 
+                                     [types.ReactionTypeEmoji("😍"), 
+                                      types.ReactionTypeEmoji("💯"), 
+                                      types.ReactionTypeEmoji("👍"),
+                                      types.ReactionTypeEmoji("🔥")], 
                                      is_big=False)
-        except: pass # في حال كانت التفاعلات غير مفعلة في القناة
+        except: pass 
 
-        # 2. إرسال ملف الـ APK ثانياً مع نفس الوصف المزخرف
-        bot.send_document(CHANNEL_ID, file_id, caption=decorated_desc, parse_mode="Markdown")
-        
-        bot.send_message(m.chat.id, "✅ تم النشر باحترافية (الصورة أولاً ثم الملف) مع التفاعلات!")
+        bot.send_message(m.chat.id, "✅ تم النشر بنجاح! الوصف على الصورة والتفاعلات تحت الملف.")
         del upload_cache[uid]
     except Exception as e:
         bot.send_message(m.chat.id, f"❌ خطأ أثناء النشر: {e}")
@@ -557,7 +563,6 @@ def list_users_for_key(m, days):
 
 def list_apps_for_key(m, days):
     apps = db_fs.collection("app_links").limit(30).get()
-    if not LOG: pass
     if not apps: return bot.send_message(m.chat.id, "لا توجد تطبيقات مسجلة.")
     mk = types.InlineKeyboardMarkup(row_width=1)
     seen_pkgs = set()
