@@ -25,6 +25,9 @@ db_fs = firestore.client()
 bot = telebot.TeleBot(API_TOKEN)
 app = Flask(__name__)
 
+# مخزن مؤقت لعملية رفع التطبيقات
+upload_cache = {}
+
 # --- [ إدارة قاعدة البيانات ] ---
 
 def get_user(uid):
@@ -186,6 +189,11 @@ def handle_calls(q):
             msg = bot.send_message(q.message.chat.id, "كم عدد الأيام؟")
             bot.register_next_step_handler(msg, process_gen_key_start)
         
+        # --- [ ميزة رفع تطبيق جديد بالقناة ] ---
+        elif q.data == "admin_upload_app":
+            msg = bot.send_message(q.message.chat.id, "🖼️ أرسل **صورة** التطبيق الآن:")
+            bot.register_next_step_handler(msg, process_upload_photo)
+
         # منطق توليد الأكواد المطور
         elif q.data.startswith("set_target_"):
             process_key_type_selection(q)
@@ -334,6 +342,7 @@ def admin_panel(m):
         types.InlineKeyboardButton("🎫 كود جديد", callback_data="gen_key"),
         types.InlineKeyboardButton("🚫 حظر", callback_data="ban_op"),
         types.InlineKeyboardButton("✅ فك حظر", callback_data="unban_op"),
+        types.InlineKeyboardButton("📤 نشر تطبيق بالقناة", callback_data="admin_upload_app"), # زر جديد
         types.InlineKeyboardButton("📢 إعلان التطبيق", callback_data="bc_app"),
         types.InlineKeyboardButton("📢 إعلان تلجرام", callback_data="bc_tele"),
         types.InlineKeyboardButton("🗑️ تصفير البيانات", callback_data="reset_data_ask")
@@ -447,6 +456,42 @@ def send_payment(m):
     bot.send_invoice(m.chat.id, title="اشتراك 30 يوم", description=f"تفعيل الجهاز: {cid.split('_')[-1]}", 
                      invoice_payload=f"pay_{cid}", provider_token="", currency="XTR",
                      prices=[types.LabeledPrice(label="VIP", amount=100)]) 
+
+# --- [ وظائف الرفع الجديدة ] ---
+
+def process_upload_photo(m):
+    if not m.photo:
+        return bot.send_message(m.chat.id, "❌ يرجى إرسال صورة صحيحة.")
+    upload_cache[m.from_user.id] = {"photo": m.photo[-1].file_id}
+    msg = bot.send_message(m.chat.id, "📂 الآن أرسل **ملف التطبيق (APK)**:")
+    bot.register_next_step_handler(msg, process_upload_file)
+
+def process_upload_file(m):
+    if not m.document:
+        return bot.send_message(m.chat.id, "❌ يرجى إرسال ملف APK.")
+    upload_cache[m.from_user.id]["file"] = m.document.file_id
+    msg = bot.send_message(m.chat.id, "✍️ أرسل **وصف التطبيق** (النص الذي سيظهر مع الصورة):")
+    bot.register_next_step_handler(msg, process_upload_desc)
+
+def process_upload_desc(m):
+    uid = m.from_user.id
+    if uid not in upload_cache or not m.text:
+        return bot.send_message(m.chat.id, "❌ حدث خطأ، حاول مجدداً.")
+    
+    desc = m.text
+    photo = upload_cache[uid]["photo"]
+    file_id = upload_cache[uid]["file"]
+    
+    try:
+        # 1. إرسال الصورة مع الوصف
+        bot.send_photo(CHANNEL_ID, photo, caption=desc, parse_mode="Markdown")
+        # 2. إرسال ملف الـ APK مباشرة بعدها
+        bot.send_document(CHANNEL_ID, file_id)
+        
+        bot.send_message(m.chat.id, "✅ تم نشر التطبيق بنجاح في القناة!")
+        del upload_cache[uid]
+    except Exception as e:
+        bot.send_message(m.chat.id, f"❌ خطأ أثناء النشر: {e}")
 
 # --- [ خيوط الخلفية ووظائف المساعدة ] --- 
 
