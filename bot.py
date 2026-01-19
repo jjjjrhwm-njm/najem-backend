@@ -1,7 +1,7 @@
 import telebot
 from telebot import types
 from flask import Flask, request
-import json, os, time, uuid, re
+import json, os, time, uuid
 from threading import Thread
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -70,7 +70,21 @@ def check_membership(user_id):
         return member.status in ['member', 'administrator', 'creator']
     except: return False 
 
-# --- [ واجهة API ] ---
+# --- [ واجهة API المحدثة ] ---
+
+@app.route('/app_update')
+def app_update():
+    pkg = request.args.get('pkg')
+    if not pkg: return "1\nhttps://t.me/your_channel"
+    
+    # جلب بيانات التحديث المخصصة لهذا التطبيق من Firebase
+    doc = db_fs.collection("app_updates").document(pkg).get()
+    if doc.exists:
+        data = doc.to_dict()
+        return f"{data.get('version', '1')}\n{data.get('url', '')}"
+    
+    return "1\nhttps://t.me/your_channel"
+
 @app.route('/check')
 def check_status():
     aid, pkg = request.args.get('aid'), request.args.get('pkg')
@@ -189,7 +203,16 @@ def handle_calls(q):
             msg = bot.send_message(q.message.chat.id, "كم عدد الأيام؟")
             bot.register_next_step_handler(msg, process_gen_key_start)
         
-        # --- ميزة رفع تطبيق جديد للقناة ---
+        # ميزة تحديث التطبيقات (جديد)
+        elif q.data == "admin_update_app_start":
+            list_apps_for_update(q.message)
+            
+        elif q.data.startswith("set_up_pkg_"):
+            pkg = q.data.replace("set_up_pkg_", "")
+            msg = bot.send_message(q.message.chat.id, f"تحديث التطبيق: `{pkg}`\n\nأرسل رقم الإصدار الجديد (أرقام فقط):")
+            bot.register_next_step_handler(msg, process_update_version, pkg)
+
+        # ميزة رفع تطبيق جديد بالقناة
         elif q.data == "admin_upload_app":
             msg = bot.send_message(q.message.chat.id, "🖼️ أرسل **صورة** التطبيق الآن:")
             bot.register_next_step_handler(msg, process_upload_photo)
@@ -257,7 +280,34 @@ def handle_calls(q):
             status_txt = "بنجاح" if mode == "ban_op" else "بنجاح"
             bot.send_message(q.message.chat.id, f"✅ تم تنفيذ العملية على `{cid}` {status_txt}")
 
-# --- [ وظائف الإدارة ] --- 
+# --- [ وظائف الإدارة المحدثة ] --- 
+
+def list_apps_for_update(m):
+    apps = db_fs.collection("app_links").get()
+    seen_pkgs = set()
+    markup = types.InlineKeyboardMarkup()
+    for a in apps:
+        pkg = a.id.split('_')[-1]
+        if pkg not in seen_pkgs:
+            markup.add(types.InlineKeyboardButton(f"📦 {pkg}", callback_data=f"set_up_pkg_{pkg}"))
+            seen_pkgs.add(pkg)
+    if not seen_pkgs:
+        return bot.send_message(m.chat.id, "❌ لا توجد تطبيقات مرتبطة حالياً لاختيارها.")
+    bot.send_message(m.chat.id, "اختر التطبيق الذي تريد تحديث إصدارة:", reply_markup=markup)
+
+def process_update_version(m, pkg):
+    version = m.text.strip()
+    msg = bot.send_message(m.chat.id, "الآن أرسل رابط التحديث الجديد (رابط تحميل مباشر أو رابط قناتك):")
+    bot.register_next_step_handler(msg, finalize_app_update_db, pkg, version)
+
+def finalize_app_update_db(m, pkg, version):
+    url = m.text.strip()
+    db_fs.collection("app_updates").document(pkg).set({
+        "version": version,
+        "url": url,
+        "last_updated": time.time()
+    })
+    bot.send_message(m.chat.id, f"✅ تم اعتماد التحديث بنجاح!\n📦 التطبيق: `{pkg}`\n🔢 الإصدار: `{version}`\n🔗 الرابط: {url}")
 
 def list_apps_for_ban(m, mode):
     apps = db_fs.collection("app_links").limit(50).get()
@@ -338,6 +388,7 @@ def admin_panel(m):
         types.InlineKeyboardButton("📝 السجلات", callback_data="admin_logs"),
         types.InlineKeyboardButton("🏆 المتصدرين", callback_data="top_ref"),
         types.InlineKeyboardButton("🎫 كود جديد", callback_data="gen_key"),
+        types.InlineKeyboardButton("🆙 تحديث تطبيق", callback_data="admin_update_app_start"),
         types.InlineKeyboardButton("📤 نشر تطبيق بالقناة", callback_data="admin_upload_app"),
         types.InlineKeyboardButton("🚫 حظر", callback_data="ban_op"),
         types.InlineKeyboardButton("✅ فك حظر", callback_data="unban_op"),
@@ -347,7 +398,7 @@ def admin_panel(m):
     )
     bot.send_message(m.chat.id, msg, reply_markup=markup, parse_mode="Markdown") 
 
-# --- [ وظائف الرفع والنشر الاحترافي المعدلة ] ---
+# --- [ وظائف الرفع والنشر الاحترافي ] ---
 
 def process_upload_photo(m):
     if not m.photo:
@@ -368,45 +419,28 @@ def process_upload_desc(m):
     if uid not in upload_cache or not m.text:
         return bot.send_message(m.chat.id, "❌ حدث خطأ، حاول مجدداً.")
     
-    # --- [ المنطق الذكي لتنسيق الوصف ] ---
-    raw_desc = m.text
-    # 1. زخرفة الأرقام (المميزات) تلقائياً
-    # يبحث عن الأرقام في بداية السطور ويضع بجانبها رموز ✨ ويجعل الرقم عريضاً
-    smart_desc = re.sub(r'^(\d+[\.\-\)]?\s*)', r'✨ **\1**', raw_desc, flags=re.MULTILINE)
-    
-    # 2. جعل الأكواد قابلة للنسخ
-    smart_desc = re.sub(r'(NJM-[A-Z0-9]+)', r'`\1`', smart_desc)
-
-    # 3. بناء القالب النهائي
+    user_desc = m.text
     decorated_desc = (
         f"🌟 **نجم الإبداع يقدم لكم** 🌟\n\n"
-        f"🚀 {smart_desc}\n\n"
-        f"🛡️ **الحالة:** شغال وآمن تماماً\n"
+        f"🚀 **{user_desc}**\n\n"
+        f"✅ **الحالة:** شغال وآمن 🛡️\n"
+        f"✨ **الميزة:** نسخة حصرية مطورة\n"
         f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-        f"👇 **حمل التطبيق من الملف أدناه مباشرة**"
+        f"📥 **حمل الآن واستمتع بالتجربة!**"
     )
     
     photo = upload_cache[uid]["photo"]
     file_id = upload_cache[uid]["file"]
     
     try:
-        # 1. إرسال الصورة أولاً مع الوصف الذكي
-        bot.send_photo(CHANNEL_ID, photo, caption=decorated_desc, parse_mode="Markdown")
+        file_msg = bot.send_document(CHANNEL_ID, file_id, disable_notification=True)
+        file_link = f"https://t.me/{CHANNEL_ID.replace('@','')}/{file_msg.message_id}"
         
-        # 2. إرسال ملف الـ APK ثانياً (بدون وصف كما طلبت)
-        msg_file = bot.send_document(CHANNEL_ID, file_id)
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("📥 تنزيل التطبيق الآن", url=file_link))
         
-        # 3. إضافة ردود الفعل (Reactions) تحت ملف التطبيق مباشرة
-        try:
-            bot.set_message_reaction(CHANNEL_ID, msg_file.message_id, 
-                                     [types.ReactionTypeEmoji("😍"), 
-                                      types.ReactionTypeEmoji("💯"), 
-                                      types.ReactionTypeEmoji("👍"),
-                                      types.ReactionTypeEmoji("🔥")], 
-                                     is_big=False)
-        except: pass 
-
-        bot.send_message(m.chat.id, "✅ تم النشر بنجاح! الوصف على الصورة والتفاعلات تحت الملف.")
+        bot.send_photo(CHANNEL_ID, photo, caption=decorated_desc, reply_markup=markup, parse_mode="Markdown")
+        bot.send_message(m.chat.id, "✅ تم النشر باحترافية وسلاسة في القناة!")
         del upload_cache[uid]
     except Exception as e:
         bot.send_message(m.chat.id, f"❌ خطأ أثناء النشر: {e}")
@@ -522,7 +556,7 @@ def send_payment(m):
 # --- [ خيوط الخلفية ووظائف المساعدة ] --- 
 
 def wipe_all_data(m):
-    collections = ["users", "app_links", "logs", "vouchers"]
+    collections = ["users", "app_links", "logs", "vouchers", "app_updates"]
     for coll in collections:
         docs = db_fs.collection(coll).get()
         for d in docs: d.reference.delete()
@@ -545,7 +579,7 @@ def process_key_type_selection(q):
         mk = types.InlineKeyboardMarkup(row_width=1)
         mk.add(types.InlineKeyboardButton("🔍 عرض التطبيقات للاختيار", callback_data=f"pick_a_list_{days}"),
                types.InlineKeyboardButton("⌨️ ارسل اسم التطبيق يدوياً", callback_data=f"pick_a_manual_{days}"))
-        bot.send_message(q.message.chat.id, "كيف تريد تحديد التطبيق?.", reply_markup=mk)
+        bot.send_message(q.message.chat.id, "كيف تريد تحديد التطبيق؟", reply_markup=mk)
     elif target == "user":
         mk = types.InlineKeyboardMarkup(row_width=1)
         mk.add(types.InlineKeyboardButton("👥 عرض المستخدمين للاختيار", callback_data=f"pick_u_list_{days}"),
