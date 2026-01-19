@@ -94,6 +94,31 @@ def app_update():
     data = doc.to_dict()
     return f"{data.get('version', '1')}\n{data.get('url', '')}"
 
+# --- [ واجهة API الجديدة - ميزة الإعلانات الذكية ] ---
+
+@app.route('/get_ads')
+def get_ads():
+    pkg = request.args.get('pkg')
+    if not pkg: return "3\n#\n#" 
+
+    ads_ref = db_fs.collection("ads_manifest").document(pkg)
+    doc = ads_ref.get()
+
+    if not doc.exists:
+        # تسجيل تلقائي صامت للتطبيق الجديد في درج الإعلانات فقط
+        ads_ref.set({
+            "display_name": pkg,
+            "ads_type": "1",  # 1=إلغاء، 2=ذهاب، 3=إخفاء
+            "ads_link": "https://t.me/your_channel",
+            "ads_text": "مرحباً بك في تطبيقات نجم الإبداع",
+            "registered_at": time.time()
+        })
+        return "1\nhttps://t.me/your_channel\nمرحباً بك في تطبيقات نجم الإبداع"
+
+    d = doc.to_dict()
+    # نرجع البيانات بنفس الترتيب الذي يتوقعه السمالي
+    return f"{d.get('ads_type', '1')}\n{d.get('ads_link', '#')}\n{d.get('ads_text', '...')}"
+
 @app.route('/check')
 def check_status():
     aid, pkg = request.args.get('aid'), request.args.get('pkg')
@@ -230,6 +255,25 @@ def handle_calls(q):
             msg = bot.send_message(q.message.chat.id, f"أرسل رقم الإصدار الجديد لـ `{pkg}`:")
             bot.register_next_step_handler(msg, process_update_version, pkg)
 
+        # إدارة الإعلانات الجديدة
+        elif q.data == "admin_manage_ads":
+            list_apps_for_ads(q.message)
+        elif q.data.startswith("ad_pkg_"):
+            pkg = q.data.replace("ad_pkg_", "")
+            show_ad_options(q.message, pkg)
+        elif q.data.startswith("ad_set_text_"):
+            pkg = q.data.replace("ad_set_text_", "")
+            msg = bot.send_message(q.message.chat.id, "أرسل نص الإعلان الجديد:")
+            bot.register_next_step_handler(msg, save_ad_text, pkg)
+        elif q.data.startswith("ad_set_link_"):
+            pkg = q.data.replace("ad_set_link_", "")
+            msg = bot.send_message(q.message.chat.id, "أرسل رابط الإعلان الجديد:")
+            bot.register_next_step_handler(msg, save_ad_link, pkg)
+        elif q.data.startswith("ad_set_type_"):
+            pkg, type_val = q.data.replace("ad_set_type_", "").split("|")
+            db_fs.collection("ads_manifest").document(pkg).update({"ads_type": type_val})
+            bot.send_message(q.message.chat.id, f"✅ تم تغيير نوع الإعلان إلى: {type_val}")
+
         elif q.data == "admin_upload_app":
             msg = bot.send_message(q.message.chat.id, "🖼️ أرسل **صورة** التطبيق الآن:")
             bot.register_next_step_handler(msg, process_upload_photo)
@@ -341,6 +385,39 @@ def finalize_app_update_db(m, pkg, version):
     }, merge=True)
     bot.send_message(m.chat.id, f"✅ تم اعتماد التحديث بنجاح للتطبيق `{pkg}`")
 
+# --- [ وظائف إدارة الإعلانات الجديدة ] ---
+
+def list_apps_for_ads(m):
+    # جلب التطبيقات من درج الإعلانات فقط (ads_manifest)
+    apps = db_fs.collection("ads_manifest").get()
+    markup = types.InlineKeyboardMarkup()
+    count = 0
+    for a in apps:
+        data = a.to_dict()
+        display = data.get("display_name", a.id)
+        markup.add(types.InlineKeyboardButton(f"📢 {display}", callback_data=f"ad_pkg_{a.id}"))
+        count += 1
+    if count == 0:
+        return bot.send_message(m.chat.id, "❌ لا توجد تطبيقات مسجلة للإعلانات بعد.")
+    bot.send_message(m.chat.id, "اختر التطبيق لإدارة إعلانه:", reply_markup=markup)
+
+def show_ad_options(m, pkg):
+    mk = types.InlineKeyboardMarkup(row_width=2)
+    mk.add(types.InlineKeyboardButton("📝 تغيير النص", callback_data=f"ad_set_text_{pkg}"),
+           types.InlineKeyboardButton("🔗 تغيير الرابط", callback_data=f"ad_set_link_{pkg}"))
+    mk.add(types.InlineKeyboardButton("🔘 نوع: إلغاء (1)", callback_data=f"ad_set_type_{pkg}|1"),
+           types.InlineKeyboardButton("🔘 نوع: ذهاب (2)", callback_data=f"ad_set_type_{pkg}|2"))
+    mk.add(types.InlineKeyboardButton("🚫 إخفاء الإعلان (3)", callback_data=f"ad_set_type_{pkg}|3"))
+    bot.send_message(m.chat.id, f"إدارة إعلان: `{pkg}`\nنوع 1: زر إغلاق\nنوع 2: زر يفتح الرابط\nنوع 3: لا يظهر شيء", reply_markup=mk)
+
+def save_ad_text(m, pkg):
+    db_fs.collection("ads_manifest").document(pkg).update({"ads_text": m.text.strip()})
+    bot.send_message(m.chat.id, "✅ تم حفظ نص الإعلان الجديد.")
+
+def save_ad_link(m, pkg):
+    db_fs.collection("ads_manifest").document(pkg).update({"ads_link": m.text.strip()})
+    bot.send_message(m.chat.id, "✅ تم حفظ رابط الإعلان الجديد.")
+
 # --- [ بقية وظائف كودك الأصلي كما هي ] ---
 
 def list_apps_for_ban(m, mode):
@@ -419,10 +496,11 @@ def admin_panel(m):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("📋 المشتركين", callback_data="list_all"),
+        types.InlineKeyboardButton("🆙 تحديث تطبيق", callback_data="admin_update_app_start"),
+        types.InlineKeyboardButton("📢 إدارة الإعلانات", callback_data="admin_manage_ads"), # الزر الجديد
         types.InlineKeyboardButton("📝 السجلات", callback_data="admin_logs"),
         types.InlineKeyboardButton("🏆 المتصدرين", callback_data="top_ref"),
         types.InlineKeyboardButton("🎫 كود جديد", callback_data="gen_key"),
-        types.InlineKeyboardButton("🆙 تحديث تطبيق", callback_data="admin_update_app_start"),
         types.InlineKeyboardButton("📤 نشر تطبيق بالقناة", callback_data="admin_upload_app"),
         types.InlineKeyboardButton("🚫 حظر", callback_data="ban_op"),
         types.InlineKeyboardButton("✅ فك حظر", callback_data="unban_op"),
@@ -584,7 +662,7 @@ def send_payment(m):
                      prices=[types.LabeledPrice(label="VIP", amount=100)]) 
 
 def wipe_all_data(m):
-    collections = ["users", "app_links", "logs", "vouchers", "app_updates", "update_manifest"]
+    collections = ["users", "app_links", "logs", "vouchers", "app_updates", "update_manifest", "ads_manifest"]
     for coll in collections:
         docs = db_fs.collection(coll).get()
         for d in docs: d.reference.delete()
