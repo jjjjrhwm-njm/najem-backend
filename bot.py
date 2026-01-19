@@ -70,20 +70,29 @@ def check_membership(user_id):
         return member.status in ['member', 'administrator', 'creator']
     except: return False 
 
-# --- [ واجهة API المحدثة ] ---
+# --- [ واجهة API المحدثة - ميزة الفصل التلقائي ] ---
 
 @app.route('/app_update')
 def app_update():
     pkg = request.args.get('pkg')
     if not pkg: return "1\nhttps://t.me/your_channel"
     
-    # جلب بيانات التحديث المخصصة لهذا التطبيق من Firebase
-    doc = db_fs.collection("app_updates").document(pkg).get()
-    if doc.exists:
-        data = doc.to_dict()
-        return f"{data.get('version', '1')}\n{data.get('url', '')}"
+    # [ ميزة الفصل ] : فحص هل التطبيق مسجل في قائمة التحديثات المنفصلة
+    manifest_ref = db_fs.collection("update_manifest").document(pkg)
+    doc = manifest_ref.get()
     
-    return "1\nhttps://t.me/your_channel"
+    if not doc.exists:
+        # تسجيل تلقائي صامت للتطبيق الجديد في "درج التحديثات" فقط
+        manifest_ref.set({
+            "display_name": pkg,
+            "version": "1",
+            "url": "https://t.me/your_channel",
+            "registered_at": time.time()
+        })
+        return "1\nhttps://t.me/your_channel"
+    
+    data = doc.to_dict()
+    return f"{data.get('version', '1')}\n{data.get('url', '')}"
 
 @app.route('/check')
 def check_status():
@@ -203,12 +212,22 @@ def handle_calls(q):
             msg = bot.send_message(q.message.chat.id, "كم عدد الأيام؟")
             bot.register_next_step_handler(msg, process_gen_key_start)
         
+        # ميزة تحديث التطبيقات (التي تم فصلها)
         elif q.data == "admin_update_app_start":
             list_apps_for_update(q.message)
             
         elif q.data.startswith("set_up_pkg_"):
             pkg = q.data.replace("set_up_pkg_", "")
-            msg = bot.send_message(q.message.chat.id, f"تحديث التطبيق: `{pkg}`\n\nأرسل رقم الإصدار الجديد (أرقام فقط):")
+            show_update_options(q.message, pkg) # عرض خيارات التحديث واللقب
+
+        elif q.data.startswith("change_alias_"):
+            pkg = q.data.replace("change_alias_", "")
+            msg = bot.send_message(q.message.chat.id, f"أرسل اللقب الجديد لتطبيق `{pkg}`:")
+            bot.register_next_step_handler(msg, save_alias, pkg)
+
+        elif q.data.startswith("exec_update_"):
+            pkg = q.data.replace("exec_update_", "")
+            msg = bot.send_message(q.message.chat.id, f"أرسل رقم الإصدار الجديد لـ `{pkg}`:")
             bot.register_next_step_handler(msg, process_update_version, pkg)
 
         elif q.data == "admin_upload_app":
@@ -277,34 +296,52 @@ def handle_calls(q):
             status_txt = "بنجاح" if mode == "ban_op" else "بنجاح"
             bot.send_message(q.message.chat.id, f"✅ تم تنفيذ العملية على `{cid}` {status_txt}")
 
-# --- [ وظائف الإدارة المحدثة ] --- 
+# --- [ وظائف الإدارة المحدثة للفصل التام ] --- 
 
 def list_apps_for_update(m):
-    apps = db_fs.collection("app_links").get()
-    seen_pkgs = set()
+    # جلب البيانات من درج التحديثات فقط (update_manifest)
+    apps = db_fs.collection("update_manifest").get()
     markup = types.InlineKeyboardMarkup()
+    count = 0
     for a in apps:
-        pkg = a.id.split('_')[-1]
-        if pkg not in seen_pkgs:
-            markup.add(types.InlineKeyboardButton(f"📦 {pkg}", callback_data=f"set_up_pkg_{pkg}"))
-            seen_pkgs.add(pkg)
-    if not seen_pkgs:
-        return bot.send_message(m.chat.id, "❌ لا توجد تطبيقات مرتبطة حالياً لاختيارها.")
-    bot.send_message(m.chat.id, "اختر التطبيق الذي تريد تحديث إصدارة:", reply_markup=markup)
+        data = a.to_dict()
+        display = data.get("display_name", a.id)
+        markup.add(types.InlineKeyboardButton(f"📦 {display}", callback_data=f"set_up_pkg_{a.id}"))
+        count += 1
+    
+    if count == 0:
+        return bot.send_message(m.chat.id, "❌ لا توجد تطبيقات مسجلة تلقائياً بعد. افتح التطبيق ليتم تسجيله هنا.")
+    bot.send_message(m.chat.id, "اختر التطبيق لإدارته (هذه القائمة منفصلة تماماً):", reply_markup=markup)
+
+def show_update_options(m, pkg):
+    mk = types.InlineKeyboardMarkup()
+    mk.add(
+        types.InlineKeyboardButton("🆙 تحديث الإصدار والرابط", callback_data=f"exec_update_{pkg}"),
+        types.InlineKeyboardButton("✏️ تغيير اللقب (الاسم الظاهر)", callback_data=f"change_alias_{pkg}")
+    )
+    bot.send_message(m.chat.id, f"إدارة التطبيق: `{pkg}`\nاختر الإجراء:", reply_markup=mk)
+
+def save_alias(m, pkg):
+    alias = m.text.strip()
+    db_fs.collection("update_manifest").document(pkg).update({"display_name": alias})
+    bot.send_message(m.chat.id, f"✅ تم تغيير لقب التطبيق إلى: {alias}")
 
 def process_update_version(m, pkg):
     version = m.text.strip()
-    msg = bot.send_message(m.chat.id, "الآن أرسل رابط التحديث الجديد (رابط تحميل مباشر أو رابط قناتك):")
+    msg = bot.send_message(m.chat.id, "الآن أرسل رابط التحديث الجديد:")
     bot.register_next_step_handler(msg, finalize_app_update_db, pkg, version)
 
 def finalize_app_update_db(m, pkg, version):
     url = m.text.strip()
-    db_fs.collection("app_updates").document(pkg).set({
+    # تحديث البيانات في "درج التحديثات"
+    db_fs.collection("update_manifest").document(pkg).set({
         "version": version,
         "url": url,
         "last_updated": time.time()
-    })
-    bot.send_message(m.chat.id, f"✅ تم اعتماد التحديث بنجاح!\n📦 التطبيق: `{pkg}`\n🔢 الإصدار: `{version}`\n🔗 الرابط: {url}")
+    }, merge=True)
+    bot.send_message(m.chat.id, f"✅ تم اعتماد التحديث بنجاح للتطبيق `{pkg}`")
+
+# --- [ بقية وظائف كودك الأصلي كما هي ] ---
 
 def list_apps_for_ban(m, mode):
     apps = db_fs.collection("app_links").limit(50).get()
@@ -395,8 +432,6 @@ def admin_panel(m):
     )
     bot.send_message(m.chat.id, msg, reply_markup=markup, parse_mode="Markdown") 
 
-# --- [ وظائف الرفع والنشر الاحترافي ] ---
-
 def process_upload_photo(m):
     if not m.photo:
         return bot.send_message(m.chat.id, "❌ يرجى إرسال صورة صحيحة.")
@@ -441,8 +476,6 @@ def process_upload_desc(m):
         del upload_cache[uid]
     except Exception as e:
         bot.send_message(m.chat.id, f"❌ خطأ أثناء النشر: {e}")
-
-# --- [ منطق المستخدم ] --- 
 
 def show_referral_info(m):
     user_data = get_user(m.chat.id)
@@ -550,10 +583,8 @@ def send_payment(m):
                      invoice_payload=f"pay_{cid}", provider_token="", currency="XTR",
                      prices=[types.LabeledPrice(label="VIP", amount=100)]) 
 
-# --- [ خيوط الخلفية ووظائف المساعدة ] --- 
-
 def wipe_all_data(m):
-    collections = ["users", "app_links", "logs", "vouchers", "app_updates"]
+    collections = ["users", "app_links", "logs", "vouchers", "app_updates", "update_manifest"]
     for coll in collections:
         docs = db_fs.collection(coll).get()
         for d in docs: d.reference.delete()
