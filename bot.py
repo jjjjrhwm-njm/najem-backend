@@ -243,7 +243,7 @@ def handle_calls(q):
             
         elif q.data.startswith("set_up_pkg_"):
             pkg = q.data.replace("set_up_pkg_", "")
-            show_update_options(q.message, pkg) # عرض خيارات التحديث واللقب
+            show_update_options(q.message, pkg) 
 
         elif q.data.startswith("change_alias_"):
             pkg = q.data.replace("change_alias_", "")
@@ -273,6 +273,12 @@ def handle_calls(q):
             pkg, type_val = q.data.replace("ad_set_type_", "").split("|")
             db_fs.collection("ads_manifest").document(pkg).update({"ads_type": type_val})
             bot.send_message(q.message.chat.id, f"✅ تم تغيير نوع الإعلان إلى: {type_val}")
+            
+        # إضافة معالج زر تغيير اللقب للإعلانات
+        elif q.data.startswith("ad_change_alias_"):
+            pkg = q.data.replace("ad_change_alias_", "")
+            msg = bot.send_message(q.message.chat.id, f"أرسل اللقب الجديد (الاسم الظاهر) لإعلان تطبيق `{pkg}`:")
+            bot.register_next_step_handler(msg, save_ad_alias, pkg)
 
         elif q.data == "admin_upload_app":
             msg = bot.send_message(q.message.chat.id, "🖼️ أرسل **صورة** التطبيق الآن:")
@@ -343,7 +349,6 @@ def handle_calls(q):
 # --- [ وظائف الإدارة المحدثة للفصل التام ] --- 
 
 def list_apps_for_update(m):
-    # جلب البيانات من درج التحديثات فقط (update_manifest)
     apps = db_fs.collection("update_manifest").get()
     markup = types.InlineKeyboardMarkup()
     count = 0
@@ -354,8 +359,8 @@ def list_apps_for_update(m):
         count += 1
     
     if count == 0:
-        return bot.send_message(m.chat.id, "❌ لا توجد تطبيقات مسجلة تلقائياً بعد. افتح التطبيق ليتم تسجيله هنا.")
-    bot.send_message(m.chat.id, "اختر التطبيق لإدارته (هذه القائمة منفصلة تماماً):", reply_markup=markup)
+        return bot.send_message(m.chat.id, "❌ لا توجد تطبيقات مسجلة تلقائياً بعد.")
+    bot.send_message(m.chat.id, "اختر التطبيق لإدارته:", reply_markup=markup)
 
 def show_update_options(m, pkg):
     mk = types.InlineKeyboardMarkup()
@@ -377,7 +382,6 @@ def process_update_version(m, pkg):
 
 def finalize_app_update_db(m, pkg, version):
     url = m.text.strip()
-    # تحديث البيانات في "درج التحديثات"
     db_fs.collection("update_manifest").document(pkg).set({
         "version": version,
         "url": url,
@@ -385,10 +389,9 @@ def finalize_app_update_db(m, pkg, version):
     }, merge=True)
     bot.send_message(m.chat.id, f"✅ تم اعتماد التحديث بنجاح للتطبيق `{pkg}`")
 
-# --- [ وظائف إدارة الإعلانات الجديدة ] ---
+# --- [ وظائف إدارة الإعلانات الجديدة والمحدثة ] ---
 
 def list_apps_for_ads(m):
-    # جلب التطبيقات من درج الإعلانات فقط (ads_manifest)
     apps = db_fs.collection("ads_manifest").get()
     markup = types.InlineKeyboardMarkup()
     count = 0
@@ -405,6 +408,7 @@ def show_ad_options(m, pkg):
     mk = types.InlineKeyboardMarkup(row_width=2)
     mk.add(types.InlineKeyboardButton("📝 تغيير النص", callback_data=f"ad_set_text_{pkg}"),
            types.InlineKeyboardButton("🔗 تغيير الرابط", callback_data=f"ad_set_link_{pkg}"))
+    mk.add(types.InlineKeyboardButton("✏️ تغيير اللقب", callback_data=f"ad_change_alias_{pkg}")) # الزر الجديد المضاف
     mk.add(types.InlineKeyboardButton("🔘 نوع: إلغاء (1)", callback_data=f"ad_set_type_{pkg}|1"),
            types.InlineKeyboardButton("🔘 نوع: ذهاب (2)", callback_data=f"ad_set_type_{pkg}|2"))
     mk.add(types.InlineKeyboardButton("🚫 إخفاء الإعلان (3)", callback_data=f"ad_set_type_{pkg}|3"))
@@ -417,6 +421,11 @@ def save_ad_text(m, pkg):
 def save_ad_link(m, pkg):
     db_fs.collection("ads_manifest").document(pkg).update({"ads_link": m.text.strip()})
     bot.send_message(m.chat.id, "✅ تم حفظ رابط الإعلان الجديد.")
+
+def save_ad_alias(m, pkg):
+    alias = m.text.strip()
+    db_fs.collection("ads_manifest").document(pkg).update({"display_name": alias})
+    bot.send_message(m.chat.id, f"✅ تم تغيير لقب الإعلان لـ `{pkg}` إلى: {alias}")
 
 # --- [ بقية وظائف كودك الأصلي كما هي ] ---
 
@@ -497,7 +506,7 @@ def admin_panel(m):
     markup.add(
         types.InlineKeyboardButton("📋 المشتركين", callback_data="list_all"),
         types.InlineKeyboardButton("🆙 تحديث تطبيق", callback_data="admin_update_app_start"),
-        types.InlineKeyboardButton("📢 إدارة الإعلانات", callback_data="admin_manage_ads"), # الزر الجديد
+        types.InlineKeyboardButton("📢 إدارة الإعلانات", callback_data="admin_manage_ads"),
         types.InlineKeyboardButton("📝 السجلات", callback_data="admin_logs"),
         types.InlineKeyboardButton("🏆 المتصدرين", callback_data="top_ref"),
         types.InlineKeyboardButton("🎫 كود جديد", callback_data="gen_key"),
