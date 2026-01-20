@@ -70,6 +70,11 @@ def check_membership(user_id):
         return member.status in ['member', 'administrator', 'creator']
     except: return False 
 
+# وظيفة مساعدة لجلب أسماء التطبيقات المخصصة للبوت حصراً
+def get_bot_names_map():
+    docs = db_fs.collection("bot_names_manifest").get()
+    return {d.id: d.to_dict().get("display_name", d.id) for d in docs}
+
 # وظيفة مساعدة لجلب كافة الأسماء المستعارة (الألقاب) لضمان سرعة البوت
 def get_all_app_names():
     apps = db_fs.collection("update_manifest").get()
@@ -282,6 +287,14 @@ def handle_calls(q):
             msg = bot.send_message(q.message.chat.id, f"أرسل اللقب الجديد (الاسم الظاهر) لإعلان تطبيق `{pkg}`:")
             bot.register_next_step_handler(msg, save_ad_alias, pkg)
 
+        # ميزة تسمية تطبيقات البوت (القسم الجديد المستقل)
+        elif q.data == "admin_manage_bot_names":
+            list_apps_for_bot_names(q.message)
+        elif q.data.startswith("bot_name_pkg_"):
+            pkg = q.data.replace("bot_name_pkg_", "")
+            msg = bot.send_message(q.message.chat.id, f"أرسل الاسم الظاهر الذي سيراه المستخدمون لتطبيق `{pkg}`:")
+            bot.register_next_step_handler(msg, save_bot_app_name, pkg)
+
         elif q.data == "admin_upload_app":
             msg = bot.send_message(q.message.chat.id, "🖼️ أرسل **صورة** التطبيق الآن:")
             bot.register_next_step_handler(msg, process_upload_photo)
@@ -429,12 +442,35 @@ def save_ad_alias(m, pkg):
     db_fs.collection("ads_manifest").document(pkg).update({"display_name": alias})
     bot.send_message(m.chat.id, f"✅ تم تغيير لقب الإعلان لـ `{pkg}` إلى: {alias}")
 
+# --- [ قسم إدارة أسماء تطبيقات البوت (التحكم في العرض للمستخدم) ] ---
+
+def list_apps_for_bot_names(m):
+    # نعتمد على حزم التطبيقات المسجلة في الربط لمعرفة التطبيقات النشطة
+    links = db_fs.collection("app_links").get()
+    active_pkgs = set([l.id.split('_')[-1] for l in links])
+    
+    markup = types.InlineKeyboardMarkup()
+    bot_names = get_bot_names_map()
+    
+    for pkg in active_pkgs:
+        name = bot_names.get(pkg, pkg)
+        markup.add(types.InlineKeyboardButton(f"🏷️ {name} ({pkg})", callback_data=f"bot_name_pkg_{pkg}"))
+        
+    if not active_pkgs:
+        return bot.send_message(m.chat.id, "❌ لا توجد تطبيقات مسجلة بالربط بعد.")
+    bot.send_message(m.chat.id, "اختر التطبيق لتغيير اسمه الظاهر داخل البوت:", reply_markup=markup)
+
+def save_bot_app_name(m, pkg):
+    new_name = m.text.strip()
+    db_fs.collection("bot_names_manifest").document(pkg).set({"display_name": new_name})
+    bot.send_message(m.chat.id, f"✅ تم اعتماد الاسم الظاهر الجديد: `{new_name}` لتطبيق `{pkg}`")
+
 # --- [ بقية وظائف كودك الأصلي كما هي ] ---
 
 def list_apps_for_ban(m, mode):
     apps = db_fs.collection("app_links").limit(50).get()
     if not apps: return bot.send_message(m.chat.id, "لا توجد أجهزة مسجلة.")
-    names_map = get_all_app_names()
+    names_map = get_bot_names_map() # استخدام أسماء البوت
     mk = types.InlineKeyboardMarkup(row_width=1)
     for a in apps:
         cid = a.id
@@ -451,7 +487,7 @@ def show_detailed_users(m):
         if not all_users: return bot.send_message(m.chat.id, "لا يوجد مستخدمين.")
         
         all_links = db_fs.collection("app_links").get()
-        names_map = get_all_app_names()
+        names_map = get_bot_names_map() # استخدام أسماء البوت
         links_map = {}
         for l in all_links:
             ld = l.to_dict()
@@ -513,6 +549,7 @@ def admin_panel(m):
         types.InlineKeyboardButton("📋 المشتركين", callback_data="list_all"),
         types.InlineKeyboardButton("🆙 تحديث تطبيق", callback_data="admin_update_app_start"),
         types.InlineKeyboardButton("📢 إدارة الإعلانات", callback_data="admin_manage_ads"),
+        types.InlineKeyboardButton("🏷️ تسمية تطبيقات البوت", callback_data="admin_manage_bot_names"), # الزر الجديد
         types.InlineKeyboardButton("📝 السجلات", callback_data="admin_logs"),
         types.InlineKeyboardButton("🏆 المتصدرين", callback_data="top_ref"),
         types.InlineKeyboardButton("🎫 كود جديد", callback_data="gen_key"),
@@ -582,7 +619,7 @@ def user_dashboard(m):
     apps = db_fs.collection("app_links").where("telegram_id", "==", uid).get()
     if not apps: return bot.send_message(m.chat.id, "❌ لا توجد تطبيقات مرتبطة.")
     
-    names_map = get_all_app_names()
+    names_map = get_bot_names_map() # استخدام أسماء البوت
     msg = "👤 **حالة اشتراكاتك:**\n"
     for doc in apps:
         data = doc.to_dict()
@@ -628,7 +665,7 @@ def redeem_code_step(m):
         apps = db_fs.collection("app_links").where("telegram_id", "==", uid).get()
         if not apps: return bot.send_message(m.chat.id, "❌ اربط جهازك أولاً.")
         update_user(uid, {"temp_code": code})
-        names_map = get_all_app_names()
+        names_map = get_bot_names_map() # استخدام أسماء البوت
         markup = types.InlineKeyboardMarkup(row_width=1)
         for doc in apps:
             pkg = doc.id.split('_')[-1]
@@ -657,7 +694,7 @@ def process_trial(m):
     apps = db_fs.collection("app_links").where("telegram_id", "==", uid).get()
     if not apps: return bot.send_message(m.chat.id, "❌ لا يوجد تطبيق مرتبط.")
     
-    names_map = get_all_app_names()
+    names_map = get_bot_names_map() # استخدام أسماء البوت
     markup = types.InlineKeyboardMarkup(row_width=1)
     for doc in apps:
         pkg = doc.id.split('_')[-1]
@@ -669,7 +706,7 @@ def trial_select_app(m, cid):
     data = get_app_link(cid)
     if not data: return
     pkg = cid.split('_')[-1]
-    display = get_all_app_names().get(pkg, pkg)
+    display = get_bot_names_map().get(pkg, pkg) # استخدام أسماء البوت
     if time.time() - data.get("trial_last_time", 0) < 86400:
         return bot.send_message(m.chat.id, f"❌ التجربة متاحة كل 24 ساعة لـ: `{display}`")
     
@@ -688,7 +725,7 @@ def send_payment(m):
                      prices=[types.LabeledPrice(label="VIP", amount=100)]) 
 
 def wipe_all_data(m):
-    collections = ["users", "app_links", "logs", "vouchers", "app_updates", "update_manifest", "ads_manifest"]
+    collections = ["users", "app_links", "logs", "vouchers", "app_updates", "update_manifest", "ads_manifest", "bot_names_manifest"]
     for coll in collections:
         docs = db_fs.collection(coll).get()
         for d in docs: d.reference.delete()
@@ -730,7 +767,7 @@ def list_users_for_key(m, days):
 def list_apps_for_key(m, days):
     apps = db_fs.collection("app_links").limit(30).get()
     if not apps: return bot.send_message(m.chat.id, "لا توجد تطبيقات مسجلة.")
-    names_map = get_all_app_names()
+    names_map = get_bot_names_map()
     mk = types.InlineKeyboardMarkup(row_width=1)
     seen_pkgs = set()
     for a in apps:
@@ -749,7 +786,7 @@ def create_final_key(m, days, target, target_id):
     txt = f"🎫 **كود جديد ({days} يوم)**\nالنوع: {target}\n"
     if target_id: 
         pkg = target_id.split('_')[-1] if "_" in target_id else target_id
-        display = get_all_app_names().get(pkg, pkg)
+        display = get_bot_names_map().get(pkg, pkg)
         txt += f"الهدف: `{display}`\n"
     txt += f"الكود: `{code}`"
     bot.send_message(m.chat.id, txt, parse_mode="Markdown")
@@ -759,7 +796,7 @@ def expiry_notifier():
         try:
             now = time.time()
             links = db_fs.collection("app_links").get()
-            names_map = get_all_app_names()
+            names_map = get_bot_names_map()
             for doc in links:
                 data = doc.to_dict()
                 if 82800 < (data.get("end_time", 0) - now) < 86400:
