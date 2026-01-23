@@ -1,4 +1,3 @@
-```python
 import telebot
 from telebot import types
 from flask import Flask, request
@@ -121,7 +120,7 @@ def get_user_and_link(uid, cid):
             db_fs.collection("users").document(str(uid)),
             db_fs.collection("app_links").document(cid)
         ]
-        docs = db_fs.get_all(refs)
+        docs = list(db_fs.get_all(refs))
         return (
             docs[0].to_dict() if docs[0].exists else None,
             docs[1].to_dict() if docs[1].exists else None
@@ -492,7 +491,9 @@ def handle_calls(q):
                 msg = bot.send_message(q.message.chat.id, "ارسل اسم حزمة التطبيق (Package ID):")
                 bot.register_next_step_handler(msg, lambda m: create_final_key(m, days, "app", m.text.strip()))
             elif q.data.startswith("gen_for_u_"):
-                _, _, _, uid_target, days = q.data.split('_')
+                parts = q.data.split('_')
+                uid_target = parts[3]
+                days = parts[4]
                 create_final_key(q.message, days, "user", uid_target)
             elif q.data.startswith("gen_for_a_"):
                 parts = q.data.split('_')
@@ -533,11 +534,11 @@ def handle_calls(q):
                 
             elif q.data.startswith("exec_ban_"):
                 parts = q.data.split('_')
-                mode = f"{parts[2]}_{parts[3]}"
-                cid = "_".join(parts[4:])
+                mode = parts[2]
+                cid = "_".join(parts[3:])
                 update_app_link(cid, {"banned": (mode == "ban_op")})
-                status_txt = "بنجاح" if mode == "ban_op" else "بنجاح"
-                bot.send_message(q.message.chat.id, f"✅ تم تنفيذ العملية على `{cid}` {status_txt}")
+                status_txt = "حظر" if mode == "ban_op" else "فك حظر"
+                bot.send_message(q.message.chat.id, f"✅ تم {status_txt} `{cid}` بنجاح")
                 
     except Exception as e:
         logger.error(f"Error handling callback: {e}")
@@ -1059,7 +1060,7 @@ def send_payment(m):
             return bot.send_message(m.chat.id, "❌ حدث خطأ.")
         
         cid = user_data.get("current_app")
-        if not cid
+        if not cid:
             return bot.send_message(m.chat.id, "❌ اربط التطبيق أولاً.")
         
         bot.send_invoice(
@@ -1108,7 +1109,9 @@ def process_gen_key_start(m):
 
 def process_key_type_selection(q):
     try:
-        _, _, target, days = q.data.split('_')
+        parts = q.data.split('_')
+        target = parts[2]
+        days = parts[3]
         if target == "all":
             create_final_key(q.message, days, "all", None)
         elif target == "app":
@@ -1308,4 +1311,3 @@ if __name__ == "__main__":
         logger.info("Bot stopped by user")
     except Exception as e:
         logger.critical(f"Bot crashed: {e}")
-```
