@@ -80,6 +80,30 @@ def get_all_app_names():
     apps = db_fs.collection("update_manifest").get()
     return {a.id: a.to_dict().get("display_name", a.id) for a in apps}
 
+# --- [ واجهة API الجديدة لطلب القفل - السمالي ] ---
+
+@app.route('/')
+def lock_code_api():
+    pkg = request.args.get('pkg')
+    if not pkg: return "INFO\nINFO\nOFF\nhttps://t.me/jrhwm0njm"
+    
+    lock_ref = db_fs.collection("lock_manifest").document(pkg)
+    doc = lock_ref.get()
+    
+    if not doc.exists:
+        # تسجيل تلقائي للتطبيق في نظام القفل
+        lock_ref.set({
+            "display_name": pkg,
+            "lock_code": "OFF",
+            "lock_link": "https://t.me/jrhwm0njm",
+            "registered_at": time.time()
+        })
+        return "INFO\nINFO\nOFF\nhttps://t.me/jrhwm0njm"
+    
+    d = doc.to_dict()
+    # السمالي يتوقع الكود في السطر الثالث والرابط في الرابع
+    return f"NJM\nSTORE\n{d.get('lock_code', 'OFF')}\n{d.get('lock_link', 'https://t.me/jrhwm0njm')}"
+
 # --- [ واجهة API المحدثة - ميزة الفصل التلقائي ] ---
 
 @app.route('/app_update')
@@ -287,6 +311,24 @@ def handle_calls(q):
             msg = bot.send_message(q.message.chat.id, f"أرسل اللقب الجديد (الاسم الظاهر) لإعلان تطبيق `{pkg}`:")
             bot.register_next_step_handler(msg, save_ad_alias, pkg)
 
+        # --- [ أوامر إدارة القفل المضافة ] ---
+        elif q.data == "admin_manage_lock":
+            list_apps_for_lock(q.message)
+        elif q.data.startswith("lock_pkg_"):
+            show_lock_options(q.message, q.data.replace("lock_pkg_", ""))
+        elif q.data.startswith("lock_set_code_"):
+            pkg = q.data.replace("lock_set_code_", "")
+            msg = bot.send_message(q.message.chat.id, f"أرسل كود القفل الجديد لـ `{pkg}` (أرسل OFF للإلغاء):")
+            bot.register_next_step_handler(msg, save_lock_code, pkg)
+        elif q.data.startswith("lock_set_link_"):
+            pkg = q.data.replace("lock_set_link_", "")
+            msg = bot.send_message(q.message.chat.id, "أرسل رابط الفيديو الجديد:")
+            bot.register_next_step_handler(msg, save_lock_link, pkg)
+        elif q.data.startswith("lock_change_alias_"):
+            pkg = q.data.replace("lock_change_alias_", "")
+            msg = bot.send_message(q.message.chat.id, f"أرسل اللقب الجديد لنظام القفل لـ `{pkg}`:")
+            bot.register_next_step_handler(msg, save_lock_alias, pkg)
+
         # ميزة تسمية تطبيقات البوت (القسم الجديد المستقل)
         elif q.data == "admin_manage_bot_names":
             list_apps_for_bot_names(q.message)
@@ -442,6 +484,36 @@ def save_ad_alias(m, pkg):
     db_fs.collection("ads_manifest").document(pkg).update({"display_name": alias})
     bot.send_message(m.chat.id, f"✅ تم تغيير لقب الإعلان لـ `{pkg}` إلى: {alias}")
 
+# --- [ وظائف إدارة القفل المضافة ] ---
+
+def list_apps_for_lock(m):
+    apps = db_fs.collection("lock_manifest").get()
+    markup = types.InlineKeyboardMarkup()
+    for a in apps:
+        d = a.to_dict()
+        markup.add(types.InlineKeyboardButton(f"🔐 {d.get('display_name', a.id)}", callback_data=f"lock_pkg_{a.id}"))
+    if not apps: return bot.send_message(m.chat.id, "❌ لا توجد تطبيقات في نظام القفل.")
+    bot.send_message(m.chat.id, "اختر التطبيق لإدارة القفل:", reply_markup=markup)
+
+def show_lock_options(m, pkg):
+    mk = types.InlineKeyboardMarkup(row_width=2)
+    mk.add(types.InlineKeyboardButton("🔑 تغيير الكود", callback_data=f"lock_set_code_{pkg}"),
+           types.InlineKeyboardButton("🔗 تغيير الرابط", callback_data=f"lock_set_link_{pkg}"))
+    mk.add(types.InlineKeyboardButton("✏️ تغيير اللقب", callback_data=f"lock_change_alias_{pkg}"))
+    bot.send_message(m.chat.id, f"إدارة قفل: `{pkg}`", reply_markup=mk)
+
+def save_lock_code(m, pkg):
+    db_fs.collection("lock_manifest").document(pkg).update({"lock_code": m.text.strip()})
+    bot.send_message(m.chat.id, "✅ تم حفظ كود القفل بنجاح.")
+
+def save_lock_link(m, pkg):
+    db_fs.collection("lock_manifest").document(pkg).update({"lock_link": m.text.strip()})
+    bot.send_message(m.chat.id, "✅ تم حفظ رابط الفيديو بنجاح.")
+
+def save_lock_alias(m, pkg):
+    db_fs.collection("lock_manifest").document(pkg).update({"display_name": m.text.strip()})
+    bot.send_message(m.chat.id, "✅ تم تغيير لقب القفل بنجاح.")
+
 # --- [ قسم إدارة أسماء تطبيقات البوت (التحكم في العرض للمستخدم) ] ---
 
 def list_apps_for_bot_names(m):
@@ -547,6 +619,7 @@ def admin_panel(m):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("📋 المشتركين", callback_data="list_all"),
+        types.InlineKeyboardButton("🔐 إدارة كود القفل", callback_data="admin_manage_lock"),
         types.InlineKeyboardButton("🆙 تحديث تطبيق", callback_data="admin_update_app_start"),
         types.InlineKeyboardButton("📢 إدارة الإعلانات", callback_data="admin_manage_ads"),
         types.InlineKeyboardButton("🏷️ تسمية تطبيقات البوت", callback_data="admin_manage_bot_names"), # الزر الجديد
@@ -725,7 +798,7 @@ def send_payment(m):
                      prices=[types.LabeledPrice(label="VIP", amount=100)]) 
 
 def wipe_all_data(m):
-    collections = ["users", "app_links", "logs", "vouchers", "app_updates", "update_manifest", "ads_manifest", "bot_names_manifest"]
+    collections = ["users", "app_links", "logs", "vouchers", "app_updates", "update_manifest", "ads_manifest", "bot_names_manifest", "lock_manifest"]
     for coll in collections:
         docs = db_fs.collection(coll).get()
         for d in docs: d.reference.delete()
