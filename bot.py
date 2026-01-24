@@ -596,44 +596,77 @@ def list_apps_for_ban(m, mode):
 def show_detailed_users(m):
     try:
         all_users = db_fs.collection("users").get()
-        if not all_users: return bot.send_message(m.chat.id, "لا يوجد مستخدمين.")
+        if not all_users: 
+            return bot.send_message(m.chat.id, "❌ لا يوجد مستخدمين حالياً.")
         
         all_links = db_fs.collection("app_links").get()
         names_map = get_bot_names_map()
         links_map = {}
+        
+        # --- [ الميزة الأولى: حساب الإحصائيات ] ---
+        total_active = 0
+        total_banned = 0
+        total_expired = 0
+
         for l in all_links:
             ld = l.to_dict()
             u_id = ld.get("telegram_id")
             if u_id:
                 if u_id not in links_map: links_map[u_id] = []
                 links_map[u_id].append({"id": l.id, "data": ld})
+                
+                rem = ld.get("end_time", 0) - time.time()
+                if ld.get("banned"): total_banned += 1
+                elif rem > 0: total_active += 1
+                else: total_expired += 1
 
-        msg = "📂 **قائمة المشتركين وتطبيقاتهم:**\n\n"
+        # إرسال رسالة الملخص أولاً
+        summary = (
+            f"📊 **ملخص نظام نجم الإبداع:**\n"
+            f"👤 إجمالي المستخدمين: `{len(all_users)}` \n"
+            f"🟢 نشطين: `{total_active}` | 🔴 محظورين: `{total_banned}`\n"
+            f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯"
+        )
+        bot.send_message(m.chat.id, summary, parse_mode="Markdown")
+
+        # --- [ الميزة الثانية: عرض المستخدمين مع أزرار التحكم ] ---
         for user_doc in all_users:
             uid = user_doc.id
             udata = user_doc.to_dict()
-            u_name = udata.get("name", "غير معروف")
+            u_name = udata.get("name", "غير معروف").replace("_", " ").replace("*", "").replace("`", "")
             user_apps = links_map.get(uid, [])
             
-            msg += f"👤 **المستخدم:** {u_name} (`{uid}`)\n"
+            msg_text = f"👤 **المستخدم:** {u_name} (`{uid}`)\n"
+            markup = types.InlineKeyboardMarkup()
+
             if not user_apps:
-                msg += "└ 🚫 لا توجد تطبيقات\n"
+                msg_text += "└ 🚫 لا توجد تطبيقات مرتبطة\n"
             else:
                 for app_item in user_apps:
-                    rem = app_item['data'].get("end_time", 0) - time.time()
-                    pkg = app_item['id'].split('_')[-1]
-                    display = names_map.get(pkg, pkg)
-                    stat = "🔴 محظور" if app_item['data'].get("banned") else (f"🟢 {int(rem/86400)} يوم" if rem > 0 else "⚪ منتهي")
-                    msg += f"└ 📦 `{display}` ⮕ {stat}\n"
-            msg += "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+                    cid = app_item['id']
+                    ld = app_item['data']
+                    rem = ld.get("end_time", 0) - time.time()
+                    pkg = cid.split('_')[-1]
+                    display_name = names_map.get(pkg, pkg).replace("_", " ").replace("*", "").replace("`", "")
+                    
+                    is_banned = ld.get("banned", False)
+                    status_txt = "🔴 محظور" if is_banned else (f"🟢 {int(rem/86400)} يوم" if rem > 0 else "⚪ منتهي")
+                    
+                    msg_text += f"└ 📦 `{display_name}` ⮕ {status_txt}\n"
+                    
+                    # إنشاء زر الحظر/فك الحظر لكل تطبيق يملكه المستخدم
+                    btn_text = f"✅ فك حظر {display_name}" if is_banned else f"🚫 حظر {display_name}"
+                    action = "unban_op" if is_banned else "ban_op"
+                    # نستخدم التنسيق الذي يتوقعه البوت الخاص بك في exec_ban_
+                    markup.add(types.InlineKeyboardButton(btn_text, callback_data=f"exec_ban_{action}_{cid}"))
+
+            # إرسال رسالة لكل مستخدم مع أزرار التحكم الخاصة به
+            bot.send_message(m.chat.id, msg_text, reply_markup=markup, parse_mode="Markdown")
             
-            if len(msg) > 3000:
-                bot.send_message(m.chat.id, msg, parse_mode="Markdown")
-                msg = ""
-                
-        if msg: bot.send_message(m.chat.id, msg, parse_mode="Markdown")
     except Exception as e:
-        bot.send_message(m.chat.id, f"حدث خطأ أثناء جلب القائمة: {e}")
+        print(f"Error in show_detailed_users: {e}")
+        bot.send_message(m.chat.id, "⚠️ حدث خطأ أثناء عرض القائمة.")
+
 
 def show_logs(m):
     try:
