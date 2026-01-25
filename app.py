@@ -1,63 +1,53 @@
 import google.generativeai as genai
 import requests
 from flask import Flask, request
+import telebot
 import os
+from threading import Thread
 
 app = Flask(__name__)
 
-# بياناتك الخاصة بمشروع نجم الإبداع
+# --- [ إعدادات نجم الإبداع ] ---
 GEMINI_KEY = "AIzaSyD7z3i-eKGO8_CxSobufqdQgdhlCBBl9xg"
 INSTANCE_ID = "159896"
-TOKEN = "3a2kuk39wf15ejiu"
+ULTRA_TOKEN = "3a2kuk39wf15ejiu"
+TELE_TOKEN = "7917846549:AAGhKz_R96_BBy-6_n-uOly5vIis3T4Wc88"
 
+# إعداد Gemini وبوت التليجرام
 genai.configure(api_key=GEMINI_KEY)
 model = genai.GenerativeModel('gemini-pro')
+bot = telebot.TeleBot(TELE_TOKEN)
 
+# --- [ مسار الواتساب - Webhook ] ---
 @app.route('/webhook', methods=['POST'])
-def webhook():
-    # استخدام force=True لضمان قراءة البيانات الواردة
+def whatsapp_webhook():
     data = request.get_json(force=True, silent=True)
-    
-    if not data:
-        print("⚠️ لم يتم استلام بيانات JSON صالحة.")
-        return "No Data", 400
-
-    print(f"📥 بيانات مستلمة: {data}")
-
-    # استخراج تفاصيل الرسالة
-    if 'data' in data:
+    if data and data.get('event_type') == 'message_received':
         msg_body = data['data'].get('body')
         sender_id = data['data'].get('from')
-        is_from_me = data['data'].get('fromMe')
-
-        if is_from_me:
-            print("🚫 هذه الرسالة صادرة مني، لن يتم الرد عليها.")
-            return "OK", 200
-
-        if msg_body and sender_id:
+        if not data['data'].get('fromMe') and msg_body:
             try:
-                print(f"🧠 جاري توليد رد لـ: {msg_body}")
-                ai_response = model.generate_content(f"أنت مساعد ذكي لراشد مطور نجم الإبداع. رد باختصار: {msg_body}")
-                
-                print(f"📤 الرد الجاهز: {ai_response.text}")
-                
-                # إرسال الرد
+                ai_res = model.generate_content(f"أنت مساعد راشد. رد باختصار: {msg_body}")
                 url = f"https://api.ultramsg.com/instance{INSTANCE_ID}/messages/chat"
-                payload = {
-                    "token": TOKEN,
-                    "to": sender_id,
-                    "body": ai_response.text
-                }
-                
-                res = requests.post(url, data=payload)
-                print(f"📡 نتيجة الإرسال لـ UltraMsg: {res.text}")
-                
+                requests.post(url, data={"token": ULTRA_TOKEN, "to": sender_id, "body": ai_res.text})
             except Exception as e:
-                print(f"❌ خطأ برمي داخلي: {str(e)}")
-                
+                print(f"WhatsApp Error: {e}")
     return "OK", 200
 
+# --- [ رد التليجرام ] ---
+@bot.message_handler(func=lambda m: True)
+def tele_reply(message):
+    try:
+        ai_res = model.generate_content(message.text)
+        bot.reply_to(message, ai_res.text)
+    except: pass
+
+def run_tele():
+    bot.infinity_polling()
+
 if __name__ == "__main__":
-    # رندر يحتاج هذا المنفذ للعمل بشكل خارجي
+    # تشغيل التليجرام في الخلفية
+    Thread(target=run_tele).start()
+    # تشغيل الواتساب كخدمة ويب أساسية
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
