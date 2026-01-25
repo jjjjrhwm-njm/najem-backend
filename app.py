@@ -10,30 +10,38 @@ GEMINI_KEY = "AIzaSyD7z3i-eKGO8_CxSobufqdQgdhlCBBl9xg"
 INSTANCE_ID = "159896"
 TOKEN = "3a2kuk39wf15ejiu"
 
-# إعداد Gemini
 genai.configure(api_key=GEMINI_KEY)
 model = genai.GenerativeModel('gemini-pro')
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    data = request.json
-    # هذا السطر سيطبع البيانات الواردة في سجلات Render لنراها بوضوح
-    print(f"📥 بيانات واردة من UltraMsg: {data}")
+    # استخدام force=True لضمان قراءة البيانات الواردة
+    data = request.get_json(force=True, silent=True)
+    
+    if not data:
+        print("⚠️ لم يتم استلام بيانات JSON صالحة.")
+        return "No Data", 400
 
-    # التحقق من وجود بيانات الرسالة
-    if data and 'data' in data:
+    print(f"📥 بيانات مستلمة: {data}")
+
+    # استخراج تفاصيل الرسالة
+    if 'data' in data:
         msg_body = data['data'].get('body')
         sender_id = data['data'].get('from')
-        
-        if msg_body:
+        is_from_me = data['data'].get('fromMe')
+
+        if is_from_me:
+            print("🚫 هذه الرسالة صادرة مني، لن يتم الرد عليها.")
+            return "OK", 200
+
+        if msg_body and sender_id:
             try:
-                print(f"🧠 جاري توليد رد ذكي للرسالة: {msg_body}")
-                prompt = f"أنت مساعد ذكي لراشد مطور نجم الإبداع. رد بلهجة سعودية: {msg_body}"
-                ai_response = model.generate_content(prompt)
+                print(f"🧠 جاري توليد رد لـ: {msg_body}")
+                ai_response = model.generate_content(f"أنت مساعد ذكي لراشد مطور نجم الإبداع. رد باختصار: {msg_body}")
                 
-                print(f"📤 الرد الجاهز من Gemini: {ai_response.text}")
+                print(f"📤 الرد الجاهز: {ai_response.text}")
                 
-                # إرسال الرد عبر UltraMsg
+                # إرسال الرد
                 url = f"https://api.ultramsg.com/instance{INSTANCE_ID}/messages/chat"
                 payload = {
                     "token": TOKEN,
@@ -41,18 +49,15 @@ def webhook():
                     "body": ai_response.text
                 }
                 
-                # إرسال الطلب كـ Form Data (أفضل توافق مع UltraMsg)
-                response = requests.post(url, data=payload)
-                print(f"📡 رد UltraMsg على طلبنا: {response.text}")
+                res = requests.post(url, data=payload)
+                print(f"📡 نتيجة الإرسال لـ UltraMsg: {res.text}")
                 
             except Exception as e:
-                print(f"❌ خطأ داخلي في المعالجة: {str(e)}")
-    else:
-        print("⚠️ البيانات المستلمة لا تحتوي على رسالة صالحة.")
+                print(f"❌ خطأ برمي داخلي: {str(e)}")
                 
     return "OK", 200
 
 if __name__ == "__main__":
-    # Render يتطلب الاستماع للمنفذ الذي يحدده تلقائياً
+    # رندر يحتاج هذا المنفذ للعمل بشكل خارجي
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
