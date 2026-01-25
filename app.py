@@ -7,18 +7,17 @@ from threading import Thread
 
 app = Flask(__name__)
 
-# --- [ إعدادات نجم الإبداع ] ---
+# بياناتك الرسمية لمشروع نجم الإبداع
 GEMINI_KEY = "AIzaSyD7z3i-eKGO8_CxSobufqdQgdhlCBBl9xg"
 INSTANCE_ID = "159896"
 ULTRA_TOKEN = "3a2kuk39wf15ejiu"
 TELE_TOKEN = "7917846549:AAGhKz_R96_BBy-6_n-uOly5vIis3T4Wc88"
 
-# إعداد Gemini وبوت التليجرام
 genai.configure(api_key=GEMINI_KEY)
 model = genai.GenerativeModel('gemini-pro')
 bot = telebot.TeleBot(TELE_TOKEN)
 
-# --- [ مسار الواتساب - Webhook ] ---
+# المسار الذي يعطي 404 - تأكد من وجوده في app.py المفعل
 @app.route('/webhook', methods=['POST'])
 def whatsapp_webhook():
     data = request.get_json(force=True, silent=True)
@@ -34,7 +33,7 @@ def whatsapp_webhook():
                 print(f"WhatsApp Error: {e}")
     return "OK", 200
 
-# --- [ رد التليجرام ] ---
+# بوت التليجرام
 @bot.message_handler(func=lambda m: True)
 def tele_reply(message):
     try:
@@ -45,9 +44,9 @@ def tele_reply(message):
 def run_tele():
     bot.infinity_polling()
 
+# تشغيل التليجرام في الخلفية
+Thread(target=run_tele).start()
+
 if __name__ == "__main__":
-    # تشغيل التليجرام في الخلفية
-    Thread(target=run_tele).start()
-    # تشغيل الواتساب كخدمة ويب أساسية
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
